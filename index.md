@@ -1,9 +1,3 @@
----
-title: "index"
-author: "Safak Kilic - IE582 - Fall 2018"
-date: "9/27/2018"
----
-
 # Progress Journal
 
 ## Week 0 (September 19)
