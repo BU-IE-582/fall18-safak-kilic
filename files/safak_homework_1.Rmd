@@ -1,0 +1,213 @@
+---
+title: "Homework 1"
+author: "Safak Kilic - IE582 - Fall 2018"
+date: "10/18/2018"
+---
+
+```{r setup, echo=FALSE, include=FALSE}
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+require(data.table)
+require(anytime)
+
+matches_path <- "~/Desktop/okul/Data Mining/data/df9b1196-e3cf-4cc7-9159-f236fe738215_matches.rds"
+odd_details_path <- "~/Desktop/okul/Data Mining/data/df9b1196-e3cf-4cc7-9159-f236fe738215_odd_details.rds"
+matches <- readRDS(matches_path)
+odd_details <- readRDS(odd_details_path)
+
+matches <- unique(na.omit(matches[, c("homescore", "awayscore") := tstrsplit(score, ":")]
+                                 [, score := NULL]
+                                 [, c("homescore", "awayscore") := list(as.numeric(homescore), as.numeric(awayscore))]))
+
+odd_details <- unique(odd_details[, oneoverodd := 1/odd]
+                                 [, totalhandicap := as.numeric(totalhandicap, na.rm = FALSE)])
+
+handicaplvl = 2.5
+odd_details_ou <- copy(odd_details)[(betType == "ou") & (totalhandicap == handicaplvl), c("matchId", "oddtype", "bookmaker", "date", "odd", "oneoverodd")][, c("islatest", "isearliest") := list(date == max(date), date == min(date)), by=list(matchId,bookmaker,oddtype)]
+
+
+```
+  
+## Task 1
+
+### Part a)
+To understand if bookmakers are good at predicting the outcomes of over/under bets, the probability of a score over 2.5 in any game (an "over" situation) was calculated two different ways. The first way used the reciprocal of the bookmakers' odds, and was termed the "Odds Probability". This defined the bookmakers' expectation, and was normalized from odds data by extracting the margin. In the second way, the ratio of matches which actually ended "over" among a certain group of matches with similar "Odds Probabilities" was determined. This was termed the "Empirical Probability" and represented the real probability of the match ending "over". To aggregate data for a sensible visualization, the matches were binned based on the "Odds Probabilities" associated with them. At least 30 matches were required per bin in each bookmaker's case so as to get a statistically meaningful result.
+
+Seeing the shape of our data:
+```{r, echo=TRUE, eval=TRUE}
+str(matches)
+str(odd_details)
+```
+  
+We make extensive use of the data.table package to chain together operations:
+```{r, echo=TRUE, eval=TRUE}
+# modify odd_details to get the first and last over/under bets, find Odd Probabilities and bin upper bounds
+odd_details_ou_latest_over <- copy(odd_details_ou)[islatest == TRUE][, c("islatest", "isearliest") := NULL][, impprob := oneoverodd/sum(oneoverodd), by=list(matchId, bookmaker)][oddtype == "over"][, bintop := ceiling(impprob/0.05)*0.05]
+odd_details_ou_earliest_over <- copy(odd_details_ou)[isearliest == TRUE][, c("islatest", "isearliest") := NULL][, impprob := oneoverodd/sum(oneoverodd), by=list(matchId, bookmaker)][oddtype == "over"][, bintop := ceiling(impprob/0.05)*0.05]
+
+matches_ou <- copy(matches)[,c("date", "leagueId", "type") := NULL][,isover := homescore + awayscore > handicaplvl]
+
+# modify matches to find Empirical Probabilities, this has to be done where each match is a unique entry to avoid more betted-on matches skewing average
+matches_ou_bins_latest <- unique(merge(matches_ou, odd_details_ou_latest_over[, c("matchId", "bintop")], by = "matchId"))[, emp := mean(isover), by=bintop]
+matches_ou_bins_earliest <- unique(merge(matches_ou, odd_details_ou_earliest_over[, c("matchId", "bintop")], by = "matchId"))[, emp := mean(isover), by=bintop]
+
+```
+
+This data was plotted against each other first including all bookmakers, and then for five individual bookmakers. A sample of the code for the first plot is given.
+
+```{r task1a, echo=TRUE, eval=TRUE}
+# merge matches and odds, this will form the basis of our plots, and also has yearly info
+mergedtable_latest <- unique(merge(odd_details_ou_latest_over, matches_ou_bins_latest, by=c("matchId", "bintop")))[, year := year(anytime(date))][, yearlyemp := mean(isover), by=list(bintop,year)]
+mergedtable_earliest <- unique(merge(odd_details_ou_earliest_over, matches_ou_bins_earliest, by=c("matchId", "bintop")))[, year := year(anytime(date))][, yearlyemp := mean(isover), by=list(bintop,year)]
+
+# ALL PROBS VS EMPIRICALS - the selection of bin size AND calculation of Odd Probabilities is done at this step - so that the data will have the same standard across every boookmaker
+allmergedlist_ou_latest <- copy(mergedtable_latest)[, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+allmergedlist_ou_earliest <- copy(mergedtable_earliest)[, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+
+# prepare a short form data for plotting
+allprobvsemp_latest <- unique(allmergedlist_ou_latest[, c("prob", "emp")])
+allprobvsemp_earliest <- unique(allmergedlist_ou_earliest[, c("prob", "emp")])
+
+plot(allprobvsemp_latest, ann=FALSE, pch = 1)
+lines(allprobvsemp_earliest, ann=FALSE, col=2, type ="p", pch = 2)
+abline(0,1)
+title(main="Over Odds Probs. vs. Empirical Probs", line = 2)
+mtext("Total")
+title(ylab="Empirical Prob.")
+title(xlab="Odds Prob.")
+legend(0.6, 0.4, c("final", "initial"), cex = 0.8, col = c("black",2), pch = c(1,2));
+```
+  
+```{r task1a2, echo=FALSE, eval=TRUE}
+# BE VS EMPIRICALS
+BEmergedlist_ou_latest <- copy(mergedtable_latest)[bookmaker == "Betfair Exchange"][, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+BEmergedlist_ou_earliest <- copy(mergedtable_earliest)[bookmaker == "Betfair Exchange"][, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+BEprobvsemp_latest <- unique(BEmergedlist_ou_latest[, c("prob", "emp")])
+BEprobvsemp_earliest <- unique(BEmergedlist_ou_earliest[, c("prob", "emp")])
+
+plot(BEprobvsemp_latest, ann=FALSE)
+lines(BEprobvsemp_earliest, ann=FALSE, col=2, type ="p", pch = 2)
+abline(0,1)
+title(main="Over Odds Probs. vs. Empirical Probs", line = 2)
+mtext("Betfair Exchange")
+title(ylab="Empirical Prob.")
+title(xlab="Odds Prob.")
+legend(0.6, 0.4, c("final", "initial"), cex = 0.8, col = c("black",2), pch = c(1,2));
+
+# 10BET VS EMPIRICALS
+tenBmergedlist_ou_latest <- copy(mergedtable_latest)[bookmaker == "10Bet"][, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+tenBmergedlist_ou_earliest <- copy(mergedtable_earliest)[bookmaker == "10Bet"][, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+tenBprobvsemp_latest <- unique(tenBmergedlist_ou_latest[, c("prob", "emp")])
+tenBprobvsemp_earliest <- unique(tenBmergedlist_ou_earliest[, c("prob", "emp")])
+
+plot(tenBprobvsemp_latest, ann=FALSE)
+lines(tenBprobvsemp_earliest, ann=FALSE, col=2, type ="p", pch = 2)
+abline(0,1)
+title(main="Over Odds Probs. vs. Empirical Probs", line = 2)
+mtext("10Bet")
+title(ylab="Empirical Prob.")
+title(xlab="Odds Prob.")
+legend(0.6, 0.4, c("final", "initial"), cex = 0.8, col = c("black",2), pch = c(1,2));
+
+# PINNACLE VS EMPIRICALS
+Pinmergedlist_ou_latest <- copy(mergedtable_latest)[bookmaker == "Pinnacle"][, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+Pinmergedlist_ou_earliest <- copy(mergedtable_earliest)[bookmaker == "Pinnacle"][, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+Pinprobvsemp_latest <- unique(Pinmergedlist_ou_latest[, c("prob", "emp")])
+Pinprobvsemp_earliest <- unique(Pinmergedlist_ou_earliest[, c("prob", "emp")])
+
+plot(Pinprobvsemp_latest, ann=FALSE)
+lines(Pinprobvsemp_earliest, ann=FALSE, col=2, type ="p", pch = 2)
+abline(0,1)
+title(main="Over Odds Probs. vs. Empirical Probs", line = 2)
+mtext("Pinnacle")
+title(ylab="Empirical Prob.")
+title(xlab="Odds Prob.")
+legend(0.55, 0.4, c("final", "initial"), cex = 0.8, col = c("black",2), pch = c(1,2));
+
+# BWIN VS EMPIRICALS
+BWmergedlist_ou_latest <- copy(mergedtable_latest)[bookmaker == "bwin"][, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+BWmergedlist_ou_earliest <- copy(mergedtable_earliest)[bookmaker == "bwin"][, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+BWprobvsemp_latest <- unique(BWmergedlist_ou_latest[, c("prob", "emp")])
+BWprobvsemp_earliest <- unique(BWmergedlist_ou_earliest[, c("prob", "emp")])
+
+plot(BWprobvsemp_latest, ann=FALSE)
+lines(BWprobvsemp_earliest, ann=FALSE, col=2, type ="p", pch = 2)
+abline(0,1)
+title(main="Over Odds Probs. vs. Empirical Probs", line = 2)
+mtext("BWIN")
+title(ylab="Empirical Prob.")
+title(xlab="Odds Prob.")
+legend(0.6, 0.4, c("final", "initial"), cex = 0.8, col = c("black",2), pch = c(1,2));
+
+# BETSAFE VS EMPIRICALS
+besmergedlist_ou_latest <- copy(mergedtable_latest)[bookmaker == "Betsafe"][, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+besmergedlist_ou_earliest <- copy(mergedtable_earliest)[bookmaker == "Betsafe"][, sufficientsamples := (.N > 29), by=bintop][sufficientsamples == TRUE][, prob := mean(impprob), by=bintop]
+besprobvsemp_latest <- unique(besmergedlist_ou_latest[, c("prob", "emp")])
+besprobvsemp_earliest <- unique(besmergedlist_ou_earliest[, c("prob", "emp")])
+
+plot(besprobvsemp_latest, ann=FALSE)
+lines(besprobvsemp_earliest, ann=FALSE, col=2, type ="p", pch = 2)
+abline(0,1)
+title(main="Over Odds Probs. vs. Empirical Probs", line = 2)
+mtext("Betsafe")
+title(ylab="Empirical Prob.")
+title(xlab="Odds Prob.")
+legend(0.6, 0.4, c("final", "initial"), cex = 0.8, col = c("black",2), pch = c(1,2));
+
+```
+  
+There are three takeaways from this analysis. The first is that unsurprisingly, the bookmakers tend to predict the empirical probabiliries fairly accurately. The second is that the initial and final odds seem to be fairly close. The third is that the distribution seems to follow a logistic-like curve, where bookmakers will overestimate the probability of an "over" when an "over" is very unlikely and underestimate the probability of an "over" when it is very likely. 
+
+### Part b)
+For this part, the performance of bookmaker "10Bet" was considered over the years since 2010. To this end, the data was assigned more granular probability values - both for the odd-based and empirical cases - by doing the same analysis explained above for each year. Instead of drawing separate plots for the Odds Probability and the Empirical Probability, the absolute value of their difference was taken for each year, giving rise to a plot which measures how off 10Bet's odds-based predictions have been over the years. Different line plots were drawn for each bin.
+
+```{r task1b, echo=FALSE, eval=TRUE}
+tenBovertime_latest <- copy(tenBmergedlist_ou_latest[bookmaker == "10Bet"])[, yearlyprob := mean(impprob), by=list(bintop,year)][, absprobdiff := abs(yearlyprob-yearlyemp)][, c("year", "absprobdiff", "bintop")]
+bintops <- unique(tenBovertime_latest[["bintop"]])
+
+par(col="black")
+plot(tenBovertime_latest[bintop == bintops[1], absprobdiff, by = year][order(year)], type = "n", ylim = c(0,0.4), ann=FALSE)
+title(main="10Bet Abs. Prediction Error")
+title(xlab="Year")
+title(ylab="Abs. Odds Prob. - Empirical Prob.")
+legend(2016, 0.4, c(bintops), cex = 0.8, col = c(1:length(bintops)), pch = c(1:length(bintops) + 14), lty = 1);
+for(i in 1:length(bintops)) {
+  par(pch=i+14, col=i)
+  lines(tenBovertime_latest[bintop == bintops[i], absprobdiff, by = year][order(year)], type = "o", ann=FALSE)
+}
+
+par(col="black")
+plot(tenBovertime_latest[bintop == bintops[1], absprobdiff, by = year][order(year)], type = "n", ylim = c(0,0.15), ann=FALSE)
+title(main="10Bet Abs. Prediction Error - Detail")
+title(xlab="Year")
+title(ylab="Abs. Odds Prob. - Empirical Prob.")
+legend(2014, 0.15, c(bintops), cex = 0.8, col = c(1:length(bintops)), pch = c(1:length(bintops) + 14), lty = 1);
+for(i in 1:length(bintops)) {
+  par(pch=i+14, col=i)
+  lines(tenBovertime_latest[bintop == bintops[i], absprobdiff, by = year][order(year)], type = "o", ann=FALSE)
+}
+```
+  
+The analysis shows that 10Bet, over the years, has mostly been successful at keeping errors below 10%, especially predicting the 0.60-0.70 Odds probability region with really low errors in the past few years (corresponding to odds ~1.4-1.7). However, there is a curious period - in 2012 and 2013, when 10Bet averaged nearly 35% error from the Empirical Probabilities.
+  
+## Task 2
+
+A quick visualization of whether the change in the odds can give us any predictive information can be done by making a histogram. To this end "1x2" odd data, which is for betting on whether the home or away team wins (or there is a draw) was used. I wanted to see whether a home team victory could be predicted by a large (downward) change in the home team victory odd "1". For the 10Bet bookmaker, the data was filtered to keep only final and initial odd values and their difference. Histograms were plotted given home victory and not-home-victory.
+
+```{r task2, echo=FALSE, eval=TRUE}
+odd_details_1x2_tenB <- copy(odd_details)[(betType == "1x2") & (bookmaker == "10Bet") & (oddtype == "odd1") , c("matchId", "date", "odd")]
+
+matches_1x2 <- copy(matches)[,c("date", "leagueId", "type") := NULL][, onewin := homescore > awayscore]
+
+odd_details_1x2_tenB_merged <- merge(odd_details_1x2_tenB, matches_1x2[, c("matchId", "onewin")], by = "matchId")[, c("islatest", "isearliest") := list(date == max(date), date == min(date)), by=matchId]
+odd_details_1x2_tenB_merged_min <- odd_details_1x2_tenB_merged[isearliest == TRUE][,c("islatest", "isearliest") := NULL]
+odd_details_1x2_tenB_merged_max <- odd_details_1x2_tenB_merged[islatest == TRUE][,c("islatest", "isearliest") := NULL]
+odd_details_1x2_tenB_remerged <- merge(odd_details_1x2_tenB_merged_max, odd_details_1x2_tenB_merged_min, by= c("matchId", "onewin"))[, odddiff := odd.x - odd.y]
+
+homewins <- odd_details_1x2_tenB_remerged[onewin == TRUE, odddiff]
+hist(homewins, xlim = c(-1,1), breaks = 100,xlab="Total Odd Change", main="Odd Changes Given Home Victory")
+nothomewins <- odd_details_1x2_tenB_remerged[onewin == FALSE, odddiff]
+hist(nothomewins, xlim = c(-1,1), breaks = 100,xlab="Total Odd Change", main="Odd Changes Given NOT Home Victory")
+```
+  
+Unfortunately this visualization is not very helpful - it shows that given a home victory, the variance of the odd difference is lower, but the odds tend to stay the same more than they change.

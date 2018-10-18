@@ -3,3 +3,7 @@
 ## Week 0 (September 20)
 
 [Here](/files/safak_homework_0.html) is my 5 interesting R examples.
+
+## Week 4 (October 19)
+
+[Here](/files/safak_homework_1.html) is my 1st HW submission.
