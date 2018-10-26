@@ -1,0 +1,530 @@
+---
+title: "Homework 2"
+author: "Safak Kilic - IE582 - Fall 2018"
+---
+```{r setup12, echo=FALSE, include=FALSE}
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+require(data.table)
+require(anytime)
+load("../data/Task12.RData")
+```  
+
+## Task 1
+
+### Part a)
+We are trying to understand if some combination of odds predicts over/under values well. First, we read the matches and odd_details datasets.
+```{r, echo=FALSE}
+str(matches)
+str(odd_details)
+```  
+
+We will need to transform the matches data set into a format which shows us actual over/under outcomes: (and 1x2 outcomes, for Part b) 
+```{r, eval=FALSE}
+# drop unplayed games, split scores, define columns showing outcomes
+matches <- na.omit(matches[,c("homescore", "awayscore") := tstrsplit(score, ":")] 
+                          [,c("homescore", "awayscore") := list(as.numeric(homescore), as.numeric(awayscore))]
+                          [,c("date", "leagueId", "type", "score") := NULL]
+                          [,c("isover", "is1", "is2", "isX", "isbts") := list(homescore + awayscore > handicaplvl, 
+                                                                              homescore > awayscore, 
+                                                                              homescore < awayscore, 
+                                                                              homescore == awayscore, 
+                                                                              homescore > 0 & awayscore > 0)])
+```  
+
+The odd_details data set contains the odds we will use to perform PCA - however there are some non-unique odd types. For example, both the "over 2.5" and "over 0.5" odds have the "over" odd type. To make these unique, we will concatenate them with the handicap levels:
+```{r, eval = FALSE}
+# elaborate oddtypes for an easier wide table construction
+odd_details_latest <- (copy(odd_details)[betType == "ha", oddtype := paste(betType, oddtype, sep="")]
+                                        [betType == "ou", oddtype := paste(oddtype, totalhandicap, sep="")]
+                                        [betType == "ah", oddtype := paste(betType, oddtype, totalhandicap, sep="")]
+                                        [, maxdate := max(date), by = list(matchId, bookmaker, oddtype)][date == maxdate]
+                                        [,c("maxdate", "date", "betType", "totalhandicap") := NULL])
+# put into wide table format, each odd type is a feature
+odd_details_wide <- dcast(copy(odd_details_latest), matchId + bookmaker ~ oddtype, value.var = "odd")
+```  
+
+Let's view a small part of our wide table:
+```{r, echo=FALSE}
+str(odd_details_wide[1:10,1:10])
+odd_details_wide[1:10,1:10]
+``` 
+
+AH (Asian Handicap) data introduces a lot of missing values, we might consider removing them and then filtering other columns which introduce missing values:
+```{r, eval=FALSE}
+odd_details_wide_noah <- odd_details_wide[, c(grep("ah", colnames(odd_details_wide), fixed = TRUE)) := NULL]
+# count NAs
+na_count_by_bm <- copy(odd_details_wide_noah)[, lapply(.SD, function(x) sum(is.na(x))), by = bookmaker][, total := rowSums(.SD[,3:length(.SD)])]
+# keep the 5 best bookmakers
+bad_bookmakers <- na_count_by_bm[,total, by = bookmaker][order(-total)]
+keep_bookmakers <- bad_bookmakers$bookmaker[(length(bad_bookmakers$bookmaker)-4):length(bad_bookmakers$bookmaker)]
+odd_details_wide_noah <- odd_details_wide_noah[bookmaker %in% keep_bookmakers]
+
+# function to remove columns with many NAs
+filter.oddtypes <- function(wide_table, kgf) {
+  if((length(wide_table) < 11) | kgf < 20) {
+    return(wide_table)
+  }
+  na_count <- copy(wide_table)[, lapply(.SD, function(x) sum(is.na(x))), by = bookmaker][, total := rowSums(.SD[,3:length(.SD)])]
+  sum1 <- sum(na_count$total)
+  bad_oddtypes <- unique(na_count[,colnames(.SD[,3:(length(.SD)-1)])[max.col(na_count[,3:(length(.SD)-1)], ties.method="first")]])
+  print(bad_oddtypes)
+  na_count <- na_count[,c(bad_oddtypes) := NULL][, total := rowSums(.SD[,3:(length(.SD)-1)])]
+  sum2 <- sum(na_count$total)
+  removed <- sum1 - sum2
+  rowremposs <- max(wide_table[,.N, by=matchId]$N)*(length(wide_table)-2)
+  print(paste("The removed number of NA entries is", removed, "deleting a match instead could remove a maximum of", rowremposs, "NA values."))
+  keepgoingfactor <- removed/rowremposs
+  wide_table <- wide_table[,c(bad_oddtypes) := NULL]
+  return(filter.oddtypes(wide_table, keepgoingfactor))
+}
+
+odd_details_wide_filtered <- filter.oddtypes(copy(odd_details_wide_noah), 100)
+```  
+
+Functions to do PCA and MDS analyses: 
+```{r, eval=FALSE}
+pca.analysis <- function(wide_filtered_table, match.tbl, bmname, condition, suppress = FALSE) {
+  df <- as.data.frame(na.omit(copy(wide_filtered_table)[bookmaker == bmname][,bookmaker := NULL]))
+  df[,-1] <- lapply(df[,-1], function(x) scale(x, center = FALSE, scale = max(x)))
+  rownames(df) <- df[["matchId"]]
+  pca <- princomp(df[,-1])
+  if(!suppress){
+    plot(pca, main = paste("PCA for", bmname))
+    print(paste("PCA for", bmname))
+    print(summary(pca))
+    print(pca$loadings)
+  }
+  mscores <- as.data.frame(pca$scores)
+  mscores[["matchId"]] <- rownames(mscores)
+  pca_m <- unique(merge(mscores, match.tbl[,c("matchId", ..condition)], by = "matchId"))
+  plot(pca_m[["Comp.1"]], pca_m[["Comp.2"]], col=ifelse(pca_m[[condition]],'red','black'), xlab = "Comp. 1", ylab = "Comp. 2", main = paste("PCA shifted data for", bmname, "and", condition))
+  legend("bottomright", c(condition, paste("NOT",condition)), fill = c('red','black'), cex = 0.75)
+  return(list(pca_m,pca))
+}
+
+do.MDS <- function(wide_filtered_table, match.tbl, mthd, bmname, condition){
+  df <- as.data.frame(na.omit(copy(wide_filtered_table)[bookmaker == bmname][,bookmaker := NULL]))
+  df[,-1] <- lapply(df[,-1], function(x) scale(x, center = FALSE, scale = max(x)))
+  rownames(df) <- df[["matchId"]]
+  d <- dist(df[,-1], method = mthd)
+  mds <- as.data.frame(cmdscale(d))
+  mds[["matchId"]] <- rownames(mds)
+  mds_m <- unique(merge(mds, match.tbl[,c("matchId", ..condition)], by = "matchId"))
+  plot(mds_m[["V1"]],mds_m[["V2"]],main=paste(bmname, mthd, "Distance MDS for", condition),xlab='Dim1', ylab='Dim2', col=ifelse(mds_m[[condition]], 'red', 'black'))
+  legend("bottomright", c(condition, paste("NOT",condition)), fill = c('red','black'), cex = 0.75)
+  invisible(NULL)
+}
+```  
+
+Do the PCA analysis for 1xBet, one of our selected bookmakers 
+```{r, fig.align="center"}
+pca1xB_ou <- pca.analysis(odd_details_wide_filtered, matches, "1xBet", "isover")
+```  
+
+The PCA analysis for the rest of the bookmakers looks like this:
+```{r, echo=FALSE, fig.align= "center", fig.height= 16, fig.width=8}
+par(mfrow = c(4,2))
+pcacom_ou <- pca.analysis(odd_details_wide_filtered, matches, "ComeOn", "isover")
+pcayou_ou <- pca.analysis(odd_details_wide_filtered, matches, "youwin", "isover")
+pcaBet_ou <- pca.analysis(odd_details_wide_filtered, matches, "Betfair", "isover")
+pcaBEx_ou <- pca.analysis(odd_details_wide_filtered, matches, "Betfair Exchange", "isover")
+```  
+
+It seems that over 90% of the total variance seems to be covered by the first principal component for all bookmakers. We can note that each plot of the data on the first two principal components is bow shaped - this indicates that our analysis produced somewhat consistent results. The plots show some small but discernable separation between the red and black dots, although the center of the plot does not seem very decisive for any bookmaker and it would be difficult to use these odds predictively unless they were quite extreme.
+
+In the case of each bookmaker, the eigencvectors of PCA are made up of various over and under odds with handicaps between 1.5 and 4.5. We can surmise that most of the variance in the data comes from such odds which capture the over/under likelihoods better than they do the 1x2 likelihoods.
+
+### Part b and c)
+We can simply run the do.MDS() function shown above to the same datasets to do a MDS analysis, simply by calling:
+```{r, fig.align="center"}
+do.MDS(odd_details_wide_filtered, matches, "euclidean", "1xBet", "isover")
+do.MDS(odd_details_wide_filtered, matches, "manhattan", "1xBet", "isover")
+```  
+
+The rest of our MDS plots are below:  
+```{r, fig.height= 16, fig.width=8, fig.align="center", echo=FALSE}
+par(mfrow = c(4,2))
+do.MDS(odd_details_wide_filtered, matches, "euclidean", "ComeOn", "isover")
+do.MDS(odd_details_wide_filtered, matches, "manhattan", "ComeOn", "isover")
+
+do.MDS(odd_details_wide_filtered, matches, "euclidean", "youwin", "isover")
+do.MDS(odd_details_wide_filtered, matches, "manhattan", "youwin", "isover")
+
+do.MDS(odd_details_wide_filtered, matches, "euclidean", "Betfair", "isover")
+do.MDS(odd_details_wide_filtered, matches, "manhattan", "Betfair", "isover")
+
+do.MDS(odd_details_wide_filtered, matches, "euclidean", "Betfair Exchange", "isover")
+do.MDS(odd_details_wide_filtered, matches, "manhattan", "Betfair Exchange", "isover")
+```  
+
+The main finding is that Euclidean MDS produces bow-shaped plots that are very similar to that of PCA, and there does seem to be some separation between the black and red points. It also can be said that the spread of the points looks higher with Euclidean MDS than in PCA. In Manhattan MDS, possibly due to the distance value not being squared (and therefore negative distances being introduced), we see a divergent pattern that makes it hard to make any predictions. It also must be noted that neither of the MDS methods offer anything like PCA eigenvectors, which can be used to understand where the variance in the data comes from. This (and the higher plot spread) makes MDS look worse as a predictive tool than PCA.
+
+## Task 2
+In the plots below, "is1", "is2" and "isX" indicate a home team win, and away team win, and a draw, respectively.
+```{r, echo=FALSE, fig.align= "center", fig.height= 20, fig.width=12}
+par(mfrow = c(5,3))
+pca1xB_1 <- pca.analysis(odd_details_wide_filtered, matches, "1xBet", "is1", suppress = TRUE)
+pcacom_1 <- pca.analysis(odd_details_wide_filtered, matches, "ComeOn", "is1", suppress = TRUE)
+pcayou_1 <- pca.analysis(odd_details_wide_filtered, matches, "youwin", "is1", suppress = TRUE)
+pcaBet_1 <- pca.analysis(odd_details_wide_filtered, matches, "Betfair", "is1", suppress = TRUE)
+pcaBEx_1 <- pca.analysis(odd_details_wide_filtered, matches, "Betfair Exchange", "is1", suppress = TRUE)
+
+pca1xB_2 <- pca.analysis(odd_details_wide_filtered, matches, "1xBet", "is2", suppress = TRUE)
+pcacom_2 <- pca.analysis(odd_details_wide_filtered, matches, "ComeOn", "is2", suppress = TRUE)
+pcayou_2 <- pca.analysis(odd_details_wide_filtered, matches, "youwin", "is2", suppress = TRUE)
+pcaBet_2 <- pca.analysis(odd_details_wide_filtered, matches, "Betfair", "is2", suppress = TRUE)
+pcaBEx_2 <- pca.analysis(odd_details_wide_filtered, matches, "Betfair Exchange", "is2", suppress = TRUE)
+
+pca1xB_X <- pca.analysis(odd_details_wide_filtered, matches, "1xBet", "isX", suppress = TRUE)
+pcacom_X <- pca.analysis(odd_details_wide_filtered, matches, "ComeOn", "isX", suppress = TRUE)
+pcayou_X <- pca.analysis(odd_details_wide_filtered, matches, "youwin", "isX", suppress = TRUE)
+pcaBet_X <- pca.analysis(odd_details_wide_filtered, matches, "Betfair", "isX", suppress = TRUE)
+pcaBEx_X <- pca.analysis(odd_details_wide_filtered, matches, "Betfair Exchange", "isX", suppress = TRUE)
+```  
+
+An interesting finding with these plots is that, while the PCA model uses only over and under odds in the eigenvectors, there is some kind of a predictive pattern visible, especially with the "is1" (home team wins) plots. We can furthermore see that a hypothetical data point in the edges of the bow-shaped plot indicates that a draw is not likely. However, it is still difficult to say whether a point in the center of the bow will be a draw. 
+
+## Task 3
+
+```{r setup3, echo=FALSE, include=FALSE}
+require(jpeg)
+load("../data/Task3.RData")
+```  
+
+Image structure and dimensions:
+```{r}
+str(image)
+dim(image)
+```
+
+```{r, echo=FALSE, fig.align="center", fig.height=7, fig.width=7}
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "Image")
+rasterImage(image, 0, 0, 1, 1)
+```
+
+```{r, echo=FALSE, fig.align="center", fig.height = 4, fig.width = 12}
+par(mfrow = c(1,3))
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "Red Channel")
+rasterImage(image = image[,,1], 0, 0, 1, 1)
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "Green Channel")
+rasterImage(image = image[,,2], 0, 0, 1, 1)
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "Blue Channel")
+rasterImage(image = image[,,3], 0, 0, 1, 1)
+```  
+
+Add jitter to images:
+```{r, eval=FALSE}
+image_noisy <- jitter(image, amount = 0.1)
+# ensure intensities stay within 0-1 range
+image_noisy[which(image_noisy > 1)] <- 1 
+image_noisy[which(image_noisy < 0)] <- 0 
+```  
+
+```{r, echo=FALSE, fig.align="center", fig.height=7, fig.width=7}
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "Noisy Image")
+rasterImage(image_noisy, 0, 0, 1, 1)
+```
+
+```{r, echo=FALSE, fig.align="center", fig.height = 4, fig.width = 12}
+par(mfrow = c(1,3))
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "Noisy Red Channel")
+rasterImage(image = image_noisy[,,1], 0, 0, 1, 1)
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "Noisy Green Channel")
+rasterImage(image = image_noisy[,,2], 0, 0, 1, 1)
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "Noisy Blue Channel")
+rasterImage(image = image_noisy[,,3], 0, 0, 1, 1)
+```  
+
+Convert a smaller, noisy image to greyscale to do PCA analysis:
+```{r}
+dim(image_small)
+```  
+
+```{r, eval=FALSE}
+image_noisy_small <- jitter(image_small, amount = 0.1)
+image_noisy_small[which(image_noisy_small > 1)] <- 1 
+image_noisy_small[which(image_noisy_small < 0)] <- 0 
+image_noisy_greyscale_small <- (image_noisy_small[,,1] + image_noisy_small[,,2] + image_noisy_small[,,3])/3                   
+```
+
+### Part a)
+Divide the image into 3x3 submatrices (patches) and do PCA with "position within patch"" (top-right, bottom, etc.) as features and each patch as instances:
+
+```{r, fig.align="center"}
+plot(pca_patch)
+summary(pca_patch)
+pca_patch$loadings
+```  
+
+We can see that the first principal component covers over 90 percent of the variance in each patch, and is the scaled sum of each pixel within the patch, with a slight bias for the center pixel. 
+
+### Part b)
+
+```{r, echo=FALSE, fig.align="center", fig.height = 4, fig.width = 12}
+par(mfrow = c(1,3))
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "First PC Image")
+rasterImage(new_img1, 0, 0, 1, 1)
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "Second PC Image")
+rasterImage(new_img2, 0, 0, 1, 1)
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", main = "Third PC Image")
+rasterImage(new_img3, 0, 0, 1, 1)
+```  
+
+We can see that the first PC is sufficient to meaningfully recreate the image, while the second and third PCs seem to show a bias for certain edges.
+
+### Part c)
+
+```{r, echo=FALSE, fig.align="center", fig.height = 4, fig.width = 12}
+par(mfrow = c(1,3))
+image(small_img1, col=gray((0:255)/255), main = "First PC")
+image(small_img2, col=gray((0:255)/255), main = "Second PC")
+image(small_img3, col=gray((0:255)/255), main = "Third PC")
+```  
+
+It can be seen that the first PC focuses on all pixels - but mostly the center, whereas the second and third PCs focus on the bottom-left and bottom-right corners, respectively.
+
+## Appendix A - Code For Tasks 1 & 2
+```{r, echo= TRUE, eval= FALSE}
+require(data.table)
+require(anytime)
+
+setwd("./Desktop/okul/Data Mining/data/")
+matches_path <- "df9b1196-e3cf-4cc7-9159-f236fe738215_matches.rds"
+odd_details_path <- "df9b1196-e3cf-4cc7-9159-f236fe738215_odd_details.rds"
+
+handicaplvl = 2.5
+matches <- readRDS(matches_path)
+# drop unplayed games, split scores, define columns showing outcomes
+matches <- na.omit(matches[,c("homescore", "awayscore") := tstrsplit(score, ":")]
+                          [,c("homescore", "awayscore") := list(as.numeric(homescore), as.numeric(awayscore))]
+                          [,c("date", "leagueId", "type", "score") := NULL]
+                          [,c("isover", "is1", "is2", "isX", "isbts") := list(homescore + awayscore > handicaplvl, 
+                                                                              homescore > awayscore, 
+                                                                              homescore < awayscore, 
+                                                                              homescore == awayscore, 
+                                                                              homescore > 0 & awayscore > 0)])
+
+
+odd_details <- readRDS(odd_details_path)
+# elaborate oddtypes for an easier wide table construction
+odd_details_latest <- (copy(odd_details)[betType == "ha", oddtype := paste(betType, oddtype, sep="")]
+                                        [betType == "ou", oddtype := paste(oddtype, totalhandicap, sep="")]
+                                        [betType == "ah", oddtype := paste(betType, oddtype, totalhandicap, sep="")]
+                                        [, maxdate := max(date), by = list(matchId, bookmaker, oddtype)][date == maxdate]
+                                        [,c("maxdate", "date", "betType", "totalhandicap") := NULL])
+# put into wide table format, each odd type is a feature
+odd_details_wide <- dcast(copy(odd_details_latest), matchId + bookmaker ~ oddtype, value.var = "odd")
+odd_details_wide_noah <- copy(odd_details_wide)[, c(grep("ah", colnames(odd_details_wide), fixed = TRUE)) := NULL]
+na_count_by_bm <- copy(odd_details_wide_noah)[, lapply(.SD, function(x) sum(is.na(x))), by = bookmaker][, total := rowSums(.SD[,3:length(.SD)])]
+bad_bookmakers <- na_count_by_bm[,total, by = bookmaker][order(-total)]
+keep_bookmakers <- bad_bookmakers$bookmaker[(length(bad_bookmakers$bookmaker)-4):length(bad_bookmakers$bookmaker)]
+odd_details_wide_noah <- odd_details_wide_noah[bookmaker %in% keep_bookmakers]
+
+filter.oddtypes <- function(wide_table, kgf) {
+  if((length(wide_table) < 11) | kgf < 20) {
+    return(wide_table)
+  }
+  na_count <- copy(wide_table)[, lapply(.SD, function(x) sum(is.na(x))), by = bookmaker][, total := rowSums(.SD[,3:length(.SD)])]
+  sum1 <- sum(na_count$total)
+  bad_oddtypes <- unique(na_count[,colnames(.SD[,3:(length(.SD)-1)])[max.col(na_count[,3:(length(.SD)-1)], ties.method="first")]])
+  print(bad_oddtypes)
+  na_count <- na_count[,c(bad_oddtypes) := NULL][, total := rowSums(.SD[,3:(length(.SD)-1)])]
+  sum2 <- sum(na_count$total)
+  removed <- sum1 - sum2
+  rowremposs <- max(wide_table[,.N, by=matchId]$N)*(length(wide_table)-2)
+  print(paste("The removed number of NA entries is", removed, "deleting a match instead could remove a maximum of", rowremposs, "NA values."))
+  keepgoingfactor <- removed/rowremposs
+  wide_table <- wide_table[,c(bad_oddtypes) := NULL]
+  return(filter.oddtypes(wide_table, keepgoingfactor))
+}
+
+odd_details_wide_filtered <- filter.oddtypes(copy(odd_details_wide_noah), 100)
+
+pca.analysis <- function(wide_filtered_table, match.tbl, bmname, condition, suppress = FALSE) {
+  df <- as.data.frame(na.omit(copy(wide_filtered_table)[bookmaker == bmname][,bookmaker := NULL]))
+  df[,-1] <- lapply(df[,-1], function(x) scale(x, center = FALSE, scale = max(x)))
+  rownames(df) <- df[["matchId"]]
+  pca <- princomp(df[,-1])
+  if(!suppress){
+    plot(pca, main = paste("PCA for", bmname))
+    print(paste("PCA for", bmname))
+    print(summary(pca))
+    print(pca$loadings)
+  }
+  mscores <- as.data.frame(pca$scores)
+  mscores[["matchId"]] <- rownames(mscores)
+  pca_m <- unique(merge(mscores, match.tbl[,c("matchId", ..condition)], by = "matchId"))
+  plot(pca_m[["Comp.1"]], pca_m[["Comp.2"]], col=ifelse(pca_m[[condition]],'red','black'), xlab = "Comp. 1", ylab = "Comp. 2", main = paste("PCA shifted data for", bmname, "and", condition))
+  legend("bottomright", c(condition, paste("NOT",condition)), fill = c('red','black'), cex = 0.75)
+  return(list(pca_m,pca))
+}
+
+do.MDS <- function(wide_filtered_table, match.tbl, mthd, bmname, condition){
+  df <- as.data.frame(na.omit(copy(wide_filtered_table)[bookmaker == bmname][,bookmaker := NULL]))
+  df[,-1] <- lapply(df[,-1], function(x) scale(x, center = FALSE, scale = max(x)))
+  rownames(df) <- df[["matchId"]]
+  d <- dist(df[,-1], method = mthd)
+  mds <- as.data.frame(cmdscale(d))
+  mds[["matchId"]] <- rownames(mds)
+  mds_m <- unique(merge(mds, match.tbl[,c("matchId", ..condition)], by = "matchId"))
+  plot(mds_m[["V1"]],mds_m[["V2"]],main=paste(bmname, mthd, "Distance MDS for", condition),xlab='Dim1', ylab='Dim2', col=ifelse(mds_m[[condition]], 'red', 'black'))
+  legend("bottomright", c(condition, paste("NOT",condition)), fill = c('red','black'), cex = 0.75)
+  invisible(NULL)
+}
+
+pca1xB_ou <- pca.analysis(odd_details_wide_filtered, matches, "1xBet", "isover")
+pcacom_ou <- pca.analysis(odd_details_wide_filtered, matches, "ComeOn", "isover")
+pcayou_ou <- pca.analysis(odd_details_wide_filtered, matches, "youwin", "isover")
+pcaBet_ou <- pca.analysis(odd_details_wide_filtered, matches, "Betfair", "isover")
+pcaBEx_ou <- pca.analysis(odd_details_wide_filtered, matches, "Betfair Exchange", "isover")
+
+pca1xB_1 <- pca.analysis(odd_details_wide_filtered, matches, "1xBet", "is1")
+pcacom_1 <- pca.analysis(odd_details_wide_filtered, matches, "ComeOn", "is1")
+pcayou_1 <- pca.analysis(odd_details_wide_filtered, matches, "youwin", "is1")
+pcaBet_1 <- pca.analysis(odd_details_wide_filtered, matches, "Betfair", "is1")
+pcaBEx_1 <- pca.analysis(odd_details_wide_filtered, matches, "Betfair Exchange", "is1")
+
+pca1xB_2 <- pca.analysis(odd_details_wide_filtered, matches, "1xBet", "is2")
+pcacom_2 <- pca.analysis(odd_details_wide_filtered, matches, "ComeOn", "is2")
+pcayou_2 <- pca.analysis(odd_details_wide_filtered, matches, "youwin", "is2")
+pcaBet_2 <- pca.analysis(odd_details_wide_filtered, matches, "Betfair", "is2")
+pcaBEx_2 <- pca.analysis(odd_details_wide_filtered, matches, "Betfair Exchange", "is2")
+
+pca1xB_X <- pca.analysis(odd_details_wide_filtered, matches, "1xBet", "isX")
+pcacom_X <- pca.analysis(odd_details_wide_filtered, matches, "ComeOn", "isX")
+pcayou_X <- pca.analysis(odd_details_wide_filtered, matches, "youwin", "isX")
+pcaBet_X <- pca.analysis(odd_details_wide_filtered, matches, "Betfair", "isX")
+pcaBEx_X <- pca.analysis(odd_details_wide_filtered, matches, "Betfair Exchange", "isX")
+
+do.MDS(odd_details_wide_filtered, matches, "euclidean", "1xBet", "isover")
+do.MDS(odd_details_wide_filtered, matches, "euclidean", "ComeOn", "isover")
+do.MDS(odd_details_wide_filtered, matches, "euclidean", "youwin", "isover")
+do.MDS(odd_details_wide_filtered, matches, "euclidean", "Betfair", "isover")
+do.MDS(odd_details_wide_filtered, matches, "euclidean", "Betfair Exchange", "isover")
+
+do.MDS(odd_details_wide_filtered, matches, "manhattan", "1xBet", "isover")
+do.MDS(odd_details_wide_filtered, matches, "manhattan", "ComeOn", "isover")
+do.MDS(odd_details_wide_filtered, matches, "manhattan", "youwin", "isover")
+do.MDS(odd_details_wide_filtered, matches, "manhattan", "Betfair", "isover")
+do.MDS(odd_details_wide_filtered, matches, "manhattan", "Betfair Exchange", "isover")
+```
+
+## Appendix B - Code For Task 3
+```{r, echo= TRUE, eval= FALSE}
+require(jpeg)
+require(data.table)
+
+setwd("./Desktop/okul/Data Mining/data/")
+image <- readJPEG("RGBclumsy.jpg")
+str(image)
+dim(image)
+
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "")
+rasterImage(image, 0, 0, 1, 1)
+rasterImage(image = image[,,1], 0, 0, 1, 1)
+rasterImage(image = image[,,2], 0, 0, 1, 1)
+rasterImage(image = image[,,3], 0, 0, 1, 1)
+
+image_noisy <- jitter(image, amount = 0.1)
+image_noisy[which(image_noisy > 1)] <- 1 
+image_noisy[which(image_noisy < 0)] <- 0 
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "")
+rasterImage(image_noisy, 0, 0, 1, 1)
+rasterImage(image = image_noisy[,,1], 0, 0, 1, 1)
+rasterImage(image = image_noisy[,,2], 0, 0, 1, 1)
+rasterImage(image = image_noisy[,,3], 0, 0, 1, 1)
+
+image_noisy_greyscale <- (image_noisy[,,1] + image_noisy[,,2] + image_noisy[,,3])/3                               
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "")
+rasterImage(image_noisy_greyscale, 0, 0, 1, 1)
+
+image_small <- readJPEG("RGBclumsysmall.jpg")
+str(image_small)
+dim(image_small)
+image_noisy_small <- jitter(image_small, amount = 0.1)
+image_noisy_small[which(image_noisy_small > 1)] <- 1 
+image_noisy_small[which(image_noisy_small < 0)] <- 0 
+image_noisy_greyscale_small <- (image_noisy_small[,,1] + image_noisy_small[,,2] + image_noisy_small[,,3])/3                               
+
+# 3x3 submatrices
+patchdim <- 3
+gap <- ((patchdim-1)/2)
+patches <- matrix(nrow = patchdim^2, ncol = ((ncol(image_noisy_greyscale_small) - (2*gap))^2))
+colnames(patches) <- rep("noname", times = ncol(patches))
+k <- 1
+kmax <- ncol(patches)
+for(i in (gap+1):(nrow(image_noisy_greyscale_small)-gap)) {
+  for (j in (gap+1):(ncol(image_noisy_greyscale_small)-gap)) {
+    patch <- image_noisy_greyscale_small[(i-gap):(i+gap), (j-gap):(j+gap)]
+    patches[,k] <- c(patch)
+    colnames(patches)[k] <- paste(i,j)
+    k <- k+1
+    print(kmax-k)
+  }
+}
+
+patches_t <- t(patches)
+colnames(patches_t) <- c("11", "21", "31", "12", "22", "32", "13", "23", "33") 
+pca_patch <- princomp(patches_t)
+plot(pca_patch)
+summary(pca_patch)
+pca_patch$loadings
+
+mapping <- (as.data.table(pca_patch$scores)[, pos := rownames(pca_patch$scores)]
+                                           [, c("xpos", "ypos") := tstrsplit(pos, " ")]
+                                           [, c("xpos", "ypos") := list(as.numeric(xpos), as.numeric(ypos))]
+                                           [, pos := NULL])
+
+new_img1 <- matrix(nrow = (ncol(image_noisy_greyscale_small) - (2*gap)), ncol = (ncol(image_noisy_greyscale_small) - (2*gap)))
+for(i in 1:nrow(new_img1)) {
+  for (j in 1:ncol(new_img1)) {
+    new_img1[i,j] <- mapping[(xpos == (i+1)) & (ypos == (j+1))][, Comp.1]
+  }
+  print(i)
+}
+new_img1[which(new_img1 > 1)] <- 1 
+new_img1[which(new_img1 < 0)] <- 0 
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "")
+rasterImage(new_img1, 0, 0, 1, 1)
+
+new_img2 <- matrix(nrow = (ncol(image_noisy_greyscale_small) - (2*gap)), ncol = (ncol(image_noisy_greyscale_small) - (2*gap)))
+for(i in 1:nrow(new_img2)) {
+  for (j in 1:ncol(new_img2)) {
+    new_img2[i,j] <- mapping[(xpos == (i+1)) & (ypos == (j+1))][, Comp.2]
+  }
+  print(i)
+}
+new_img2[which(new_img2 > 1)] <- 1 
+new_img2[which(new_img2 < 0)] <- 0 
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "")
+rasterImage(new_img2, 0, 0, 1, 1)
+
+new_img3 <- matrix(nrow = (ncol(image_noisy_greyscale_small) - (2*gap)), ncol = (ncol(image_noisy_greyscale_small) - (2*gap)))
+for(i in 1:nrow(new_img3)) {
+  for (j in 1:ncol(new_img3)) {
+    new_img3[i,j] <- mapping[(xpos == (i+1)) & (ypos == (j+1))][, Comp.3]
+  }
+  print(i)
+}
+new_img3[which(new_img3 > 1)] <- 1 
+new_img3[which(new_img3 < 0)] <- 0 
+plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "")
+rasterImage(new_img3, 0, 0, 1, 1)
+
+small_img1 <- matrix(pca_patch$loadings[,1],3,3)
+small_img1[which(small_img1 > 1)] <- 1 
+small_img1[which(small_img1 < 0)] <- 0 
+image(small_img1, col=gray((0:255)/255))
+
+small_img2 <- matrix(pca_patch$loadings[,2],3,3)
+small_img2[which(small_img2 > 1)] <- 1 
+small_img2[which(small_img2 < 0)] <- 0 
+image(small_img2, col=gray((0:255)/255))
+
+small_img3 <- matrix(pca_patch$loadings[,3],3,3)
+small_img3[which(small_img3 > 1)] <- 1 
+small_img3[which(small_img3 < 0)] <- 0 
+image(small_img3, col=gray((0:255)/255))
+```
+

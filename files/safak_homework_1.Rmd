@@ -1,7 +1,6 @@
 ---
 title: "Homework 1"
 author: "Safak Kilic - IE582 - Fall 2018"
-date: "10/18/2018"
 ---
 
 ```{r setup, echo=FALSE, include=FALSE}

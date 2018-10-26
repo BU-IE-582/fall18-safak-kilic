@@ -7,3 +7,7 @@
 ## Week 4 (October 19)
 
 [Here](/files/safak_homework_1.html) is my 1st HW submission.
+
+## Week 5 (October 26)
+
+[Here](/files/safak_homework_2.html) is my 2nd HW submission.
