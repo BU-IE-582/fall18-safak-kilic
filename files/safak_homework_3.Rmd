@@ -1,0 +1,693 @@
+---
+title: "Homework 3"
+author: "Safak Kilic - IE582 - Fall 2018"
+---
+
+```{r setup, echo=FALSE, include=FALSE}
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+require(data.table)
+require(TunePareto)
+require(plotly)
+require(caret)
+require(penalized)
+require(tictoc)
+require(htmltools)
+require(e1071)
+# read motion data 
+testX <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TEST/uWaveGestureLibrary_X_TEST")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+testY <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TEST/uWaveGestureLibrary_Y_TEST")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+testZ <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TEST/uWaveGestureLibrary_Z_TEST")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+trainX <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TRAIN/uWaveGestureLibrary_X_TRAIN")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+trainY <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TRAIN/uWaveGestureLibrary_Y_TRAIN")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+trainZ <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TRAIN/uWaveGestureLibrary_Z_TRAIN")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+
+# read ECG data
+ECGtrain <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/NN_Classification_ecgTRAIN"))
+ECGtrain[[1]] <- as.numeric(ECGtrain[[1]] > 0)
+ECGtest <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/NN_Classification_ecgTEST"))
+ECGtest[[1]] <- as.numeric(ECGtest[[1]] > 0)
+```  
+
+## Task 1
+
+### Part a)
+
+For this part, we will try to make sense of the acceleration data we have by plotting it in 3-D. We would like not only to plot the acceleration, but find out the velocities and positions as well. Fortunately, we know that these are first and second antiderivatives of acceleration, and can be approximated by a finite difference method. 
+
+```{r integrate}
+# this is simply a method which applies cumsum() rowwise to the data
+integrate <- function(tbl) {
+  tblint <- as.data.frame(t(apply(tbl[!(names(tbl) %in% c("gesture", "instance"))], 1, cumsum)))
+  tblint <- cbind(tblint, gesture = tbl[["gesture"]], instance = tbl[["instance"]])
+  return(as.data.frame(tblint))
+}
+```  
+
+We will be using the Plotly package, which requires 3-D plots to be data.frames with each dimension in a column. Our data is currently such that a single row across 3 data.frames indicates 3 time series in X, Y and Z:
+
+```{r pf}
+plotfunc <- function(dataX, dataY, dataZ, row) {
+  dataX <- dataX[row,]
+  dataY <- dataY[row,]
+  dataZ <- dataZ[row,]
+  # maintain gesture information
+  gesture <- dataX[["gesture"]]
+  tdataX <- t(dataX[!(names(dataX) %in% c("gesture", "instance"))])
+  colnames(tdataX) <- "X"
+  tdataY <- t(dataY[!(names(dataY) %in% c("gesture", "instance"))])
+  colnames(tdataY) <- "Y"
+  tdataZ <- t(dataZ[!(names(dataZ) %in% c("gesture", "instance"))])
+  colnames(tdataZ) <- "Z"
+  times <- as.data.frame(1:nrow(tdataX))
+  colnames(times) <- "t"
+  toplot <- as.data.frame(cbind(tdataX, tdataY, tdataZ, times))
+  return(list(gest = gesture, plt = toplot))
+}
+```  
+
+```{r plot, echo=FALSE}
+instlist <- c(which(trainX[["gesture"]] == 1)[1], which(trainX[["gesture"]] == 2)[1], which(trainX[["gesture"]] == 3)[1], which(trainX[["gesture"]] == 4)[1],
+              which(trainX[["gesture"]] == 5)[1], which(trainX[["gesture"]] == 6)[1], which(trainX[["gesture"]] == 7)[1], which(trainX[["gesture"]] == 8)[1])
+
+inst <- instlist[1]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa1 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv1 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp1 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[2]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa2 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv2 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp2 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[3]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa3 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv3 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp3 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[4]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa4 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv4 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp4 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[5]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa5 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv5 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp5 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[6]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa6 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv6 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp6 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[7]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa7 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv7 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp7 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[8]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa8 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv8 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp8 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+pa1
+pv1
+pp1
+
+pa2
+pv2
+pp2
+
+pa3
+pv3
+pp3
+
+pa4
+pv4
+pp4
+
+pa5
+pv5
+pp5
+
+pa6
+pv6
+pp6
+
+pa7
+pv7
+pp7
+
+pa8
+pv8
+pp8
+```  
+
+The colors, from dark purple to light yellow, indicate movement forward in time. Unfortunately the acceleration plots are too chaotic to distinguish visually, and the velocity plots look too similar to each other, even though they have a shared characteristic of starting and ending at the same point (presumably at rest). The position plots are the most striking, because even though they do not look like the gestures shown, they are clearly distinguishable from each other.
+
+### Part b)
+
+To use the KNN algorithm on our data, we add X, Y and Z dimension accelerations "end-to-end," while maintaining the instance and gesture information needed to identify them. Our subsequent functions will depend on this format of data, where there is one column of "gesture" information and the rest of the data are features made up of time points in the X, Y, and Z directions. 
+
+```{r prepKNN, echo = FALSE}
+#### Prepare Train/Test Data for KNN ####
+train <- Reduce(function(x, y) merge(x, y, by=c("gesture", "instance")), list(trainX, trainY, trainZ), accumulate=F)
+rownames(train) <- train[["instance"]]
+train <- train[!(colnames(train) %in% "instance")]
+
+test <- Reduce(function(x, y) merge(x, y, by=c("gesture", "instance")), list(testX, testY, testZ), accumulate=F)
+rownames(test) <- test[["instance"]]
+test <- test[!(colnames(test) %in% "instance")]
+```
+
+We can take a look at their dimensions, and see that especially the test data set has many instances: 
+
+```{r dims}
+dim(train)
+dim(test)
+```  
+
+Simple guesses for the two distance measures we can use to run a KNN algorithm are Euclidean distance and Manhattan distance. Since there seem to be no publically-available R packages which implement Manhattan-distance-KNN, we can write one from scratch. Since the distance matrix takes a lot of time to compute, we will compute it once and iterate through it:
+
+```{r, KNN}
+# function for doing knn for a given k and specific test and train sets
+# returns a data.frame of predicted vs. real class
+totalKNN <- function(testset, trainset, K, mth = "euclidean") {
+  numtest <- nrow(testset)
+  numtrain <- nrow(trainset)
+  # response vectors
+  trainsetclass <- trainset[["gesture"]]
+  testsetclass <- testset[["gesture"]]
+  # combine the datasets
+  comb <- rbind(testset, trainset)
+  comb <- comb[!(names(comb) %in% "gesture")]
+  
+  # evaluate distance matrix ONCE, out of the loop, for time-efficiency
+  d <- as.matrix(dist(comb, method = mth))
+  
+  # iterate through the distance matrix
+  predvreal <- matrix(nrow = numtest, ncol = 2)
+  for(i in 1:numtest) {
+    neighborhood <- order(d[i,(numtest+1):(numtest+numtrain)])
+    neighbors <- neighborhood[1:K]
+    neighborgestures <- trainsetclass[neighbors]
+    # below is an implementation of the mode operation (majority rule)
+    neighbortable <- table(neighborgestures)
+    prediction <- names(neighbortable)[neighbortable == max(neighbortable)][[1]]
+    confusionrow <- c(prediction, testsetclass[i])
+    predvreal[i,] <- confusionrow
+  }
+  predvreal <- as.data.frame(predvreal)
+  names(predvreal) <- c("prediction", "real")
+  return(predvreal)
+}
+```  
+
+We also need a function to iteratively do KNN over a range of K values, for each fold of cross-validation we intend to do. We can borrow the skeleton from the code used in class, and substitute our KNN method in the place of the Euclidean-only method from the FNN package: 
+
+```{r, KNNCV}
+# function for doing knn with CV
+# returns a data.table of totalKNN outputs at each fold, rep, and the optimal k  
+# no need for stratified sampling since the data is evenly split between all 8 gestures
+totalKNN.CV <- function(trainset, reps, folds, k_levels = 1:10, method = "euclidean", strat = FALSE) {
+  
+  indices <- generateCVRuns(trainset[["gesture"]], reps, folds, stratified = strat)
+  
+  finalresult <- data.table()
+  for(i in 1:reps) {
+    thisrepindices <- indices[[i]]
+    
+    for(j in 1:folds) {
+
+      testindices <- thisrepindices[[j]]
+      
+      cvtrain <- trainset[-testindices,]
+      cvtest <- trainset[testindices,]
+
+      for(y in 1:length(k_levels)) { 
+        k <- k_levels[y]
+        k_result <- as.data.table(totalKNN(testset = cvtest, trainset = cvtrain, K = k, mth = method))
+        k_result <- copy(k_result)[, c("rep", "fold", "k") := list(i, j, k)]
+        finalresult <- rbind(finalresult, k_result, fill = TRUE)
+      }
+    }
+  }
+  # finally, find accurate CV runs by K and replication, average to find the top K value
+finresdetails <- copy(finalresult)[, list(accurate = .SD[prediction == real,.N], inaccurate = .SD[prediction != real,.N]), by = list(rep, fold, k)][, accuracy := accurate/(accurate + inaccurate), by = list(rep, fold, k)]
+bestks <- copy(finresdetails)[, .(accuracy = mean(accuracy)), by = list(k)][order(-accuracy)]
+bestk <- bestks[1, k]
+return(list(allptspred = finalresult, toplist = bestks, topk = bestk))
+}
+```  
+
+Now we can call the CV method on the training data, using both distance types, and a range of K between 1 and 5, using 10-fold CV:
+
+```{r, KNNtrain, echo=FALSE}
+tic("Euclidean KNN Training")
+trainresult_euc <- totalKNN.CV(trainset = train, reps = 1, folds = 10, k_levels = 1:5, method = "euclidean")
+toc()
+trainresult_euc$toplist
+
+tic("Manhattan KNN Training")
+trainresult_man <- totalKNN.CV(trainset = train, reps = 1, folds = 10, k_levels = 1:5, method = "manhattan")
+toc()
+trainresult_man$toplist
+```  
+
+### Part c)
+
+Now we simply have to use the best K values found above as arguments in our KNN method, predicting the labels for the test data. 
+
+```{r, KNNtest, echo=FALSE}
+tic("Euclidean KNN Test")
+testresult_euc <- totalKNN(testset = test, trainset = train, K = trainresult_euc$topk, mth = "euclidean")
+c_euc <- confusionMatrix(testresult_euc$prediction, testresult_euc$real)
+toc()
+c_euc$table
+c_euc$overall
+
+tic("Manhattan KNN Test")
+testresult_man <- totalKNN(testset = test, trainset = train, K = trainresult_man$topk, mth = "manhattan")
+c_man <- confusionMatrix(testresult_man$prediction, testresult_man$real)
+toc()
+c_man$table
+c_man$overall
+```  
+
+We can see that for both our distance measures, a nearly 95% level of accuracy is reached. This is a quite satisfactory level. We can see that the main problem areas are distinguishing between gestures 3-4-5-6, the "straight-line" gestures. It may be possible that while positionally, these gestures are very distinct, their acceleration profiles are similar (jerky start, long period of low acceleration, abrupt halt). The biggest single cause of misclassification by far for both distances is the case of a 4 ("left") prediction for a 5 ("up") motion. It is hard to pinpoint why this asymmetry exists, but it may be related to the "handedness" of test subjects.
+
+It must also be noted that, while the runtimes are considerable in both the training and testing steps, training takes about twice as long. While training works with smaller data sets (a tenth of the train data instead of the full test data) each time, it also has to compute the distance matrix many more times instead of just once. 
+
+## Task 2
+
+### Part a)
+
+A fused LASSO model penalizes the logistic regression coefficients in the LASSO term (lambda1) and the difference between these coefficients in the fusion term (lambda2). This minimizes variance overall, and variance between any two features. The fusion term is especially relevant when the features following each other are related in some way (i.e. in time-series data, or genomic data). Here we will use the "penalized" package to carry out this analysis on ECG data, which is a time-series.
+
+We can write the following methods to make our analysis more modular: 
+
+```{r, regmethods}
+# Find optimal lambda values 
+flassoOpt <- function(trainset, nfold, modelname) {
+  # the first function calculates a lasso penalty, the second calculates the fusion penalty
+  opt1 <- optL1(response = trainset[, 1], penalized = trainset[, -1], fold = nfold, model = modelname, trace = FALSE)
+  opt1f <- optL1(response = trainset[, 1], penalized = trainset[, -1], fusedl = TRUE, fold = nfold, model = modelname, trace = FALSE)
+  # this is the fit with the fused lasso penalties
+  fit <- penalized(response = trainset[, 1], penalized = trainset[, -1], lambda1 = opt1$lambda, lambda2 = opt1f$lambda, fusedl = TRUE, model = modelname)
+  return(fit)
+}
+# Predict classes for some test data
+flassoPredict <- function(fit, test) {
+  pred <- as.numeric(predict(fit, test[, -1]) >= 0.5)
+  res <- as.data.frame(list(predicted = pred, real = test[[1]]))
+  return(res)
+}
+```  
+
+Now we can train and test on our data:
+
+```{r, reg1, echo=FALSE}
+tic("Regression Training")
+fitopt <- flassoOpt(ECGtrain, 10, "logistic")
+toc()
+print("Lambda1 - LASSO")
+fitopt@lambda1
+print("Lambda2 - Fusion")
+fitopt@lambda2
+
+tic("Regression Test")
+ECGpred <- flassoPredict(fitopt, ECGtest)
+c_ECG <- confusionMatrix(as.factor(ECGpred$predicted), as.factor(ECGpred$real))
+toc()
+c_ECG$table
+c_ECG$overall
+```  
+
+We can see that this model has an accuracy of nearly 82%, which is probably not good considering this is health-related data. Additionally, we see that there is a bigger rate of false negatives (heart problems not caught) than false positives (problems "caught" when they do not exist), which is dangerous for the patients. 
+
+### Part b)
+
+Below is the coefficients matrix for our model fit.
+
+```{r, reg1coeffs, echo=FALSE}
+fitopt@penalized
+```
+
+The first thing to notice is that the LASSO penalty has implicitly performed feature selection by setting many coefficients identically to zero. The second visible trend is that many coefficients repeat back-to-back. This is due to the fusion penalty discouraging large differences between "adjacent" features. Even so, we find that most of the coefficients are zero, with jumps followed by plateaus. It can be surmised, since each feature is a time point in a time-series, that the jumps correspond to actual jumps in the ECG signal of the heart.
+
+### Part c)
+
+Now we will apply the same analysis to data points which come from the difference between adjacent time-series data. 
+
+```{r, diffs, echo= FALSE}
+ECGtraindiff <- as.data.frame(cbind(ECGtrain[[1]], t(apply(ECGtrain[, -1], 1, diff))))
+ECGtestdiff <- as.data.frame(cbind(ECGtest[[1]], t(apply(ECGtest[, -1], 1, diff))))
+```
+
+```{r, reg2, echo= FALSE}
+tic("Regression Diff Training")
+fitoptdiff <- flassoOpt(ECGtraindiff, 10, "logistic")
+toc()
+print("Lambda1 - LASSO")
+fitoptdiff@lambda1
+print("Lambda2 - Fusion")
+fitoptdiff@lambda2
+
+tic("Regression Diff Test")
+ECGpreddiff <- flassoPredict(fitoptdiff, ECGtestdiff)
+c_ECGdiff <- confusionMatrix(as.factor(ECGpreddiff$predicted), as.factor(ECGpreddiff$real))
+toc()
+c_ECGdiff$table
+c_ECGdiff$overall
+```
+
+A nearly 84% success rate is obtained. The results in this part are mostly the same as they were in the previous section, which makes sense since the cumulative difference operation is expected to maintain the same close relationship between the data points in series, and therefore the features. The most striking difference is that the lambda values are much smaller than the case without differences taken between data points, which indicates that the decision boundaries need to be sharper. 
+
+### Part d)
+
+Below is the coefficients matrix for our model fit.
+
+```{r, reg2coeffs, echo=FALSE}
+fitoptdiff@penalized
+```
+
+The coefficient matrices look strikingly similar to the previous section, the two main differences are that the occurence of the nonzero coefficients seems to have shifted, and the coefficients have switched signs. This is to be expected of a subtraction-based transformation of the data.
+
+## Appendix
+```{r, app, echo=TRUE,eval=FALSE}
+require(data.table)
+require(TunePareto)
+require(plotly)
+require(caret)
+require(penalized)
+require(tictoc)
+require(htmltools)
+require(e1071)
+
+setwd("Desktop/okul/Data Mining/data/")
+#### Read Motion Files ####
+# explicitly name instance information to prevent distortion
+# explicitly name gesture information for easier searchability
+testX <- as.data.frame(fread("UWave_TEST/uWaveGestureLibrary_X_TEST")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+testY <- as.data.frame(fread("UWave_TEST/uWaveGestureLibrary_Y_TEST")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+testZ <- as.data.frame(fread("UWave_TEST/uWaveGestureLibrary_Z_TEST")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+trainX <- as.data.frame(fread("UWave_TRAIN/uWaveGestureLibrary_X_TRAIN")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+trainY <- as.data.frame(fread("UWave_TRAIN/uWaveGestureLibrary_Y_TRAIN")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+trainZ <- as.data.frame(fread("UWave_TRAIN/uWaveGestureLibrary_Z_TRAIN")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+
+#### Plot Preparation Functions ####
+# integrating via cumulative sum function
+integrate <- function(tbl) {
+  tblint <- as.data.frame(t(apply(tbl[!(names(tbl) %in% c("gesture", "instance"))], 1, cumsum)))
+  tblint <- cbind(tblint, gesture = tbl[["gesture"]], instance = tbl[["instance"]])
+  return(as.data.frame(tblint))
+}
+
+# function to combine different-dimensional data from a single row 
+plotfunc <- function(dataX, dataY, dataZ, row) {
+  dataX <- dataX[row,]
+  dataY <- dataY[row,]
+  dataZ <- dataZ[row,]
+  gesture <- dataX[["gesture"]]
+  tdataX <- t(dataX[!(names(dataX) %in% c("gesture", "instance"))])
+  colnames(tdataX) <- "X"
+  tdataY <- t(dataY[!(names(dataY) %in% c("gesture", "instance"))])
+  colnames(tdataY) <- "Y"
+  tdataZ <- t(dataZ[!(names(dataZ) %in% c("gesture", "instance"))])
+  colnames(tdataZ) <- "Z"
+  times <- as.data.frame(1:nrow(tdataX))
+  colnames(times) <- "t"
+  toplot <- as.data.frame(cbind(tdataX, tdataY, tdataZ, times))
+  return(list(gest = gesture, plt = toplot))
+}
+
+#### Plot ####
+instlist <- c(which(trainX[["gesture"]] == 1)[1], which(trainX[["gesture"]] == 2)[1], which(trainX[["gesture"]] == 3)[1], which(trainX[["gesture"]] == 4)[1], 
+              which(trainX[["gesture"]] == 5)[1], which(trainX[["gesture"]] == 6)[1], which(trainX[["gesture"]] == 7)[1], which(trainX[["gesture"]] == 8)[1])
+
+inst <- instlist[1]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers() 
+plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers() 
+plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[2]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers() 
+plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers() 
+plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[3]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers() 
+plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers() 
+plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[4]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers() 
+plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers() 
+plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[5]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers() 
+plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers() 
+plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[6]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers() 
+plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers() 
+plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[7]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers() 
+plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers() 
+plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[8]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers() 
+plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers() 
+plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+#### Prepare Train/Test Data for KNN ####
+train <- Reduce(function(x, y) merge(x, y, by=c("gesture", "instance")), list(trainX, trainY, trainZ), accumulate=F)
+rownames(train) <- train[["instance"]]
+train <- train[!(colnames(train) %in% "instance")]
+
+test <- Reduce(function(x, y) merge(x, y, by=c("gesture", "instance")), list(testX, testY, testZ), accumulate=F)
+rownames(test) <- test[["instance"]]
+test <- test[!(colnames(test) %in% "instance")]
+
+#### KNN Functions ####
+# function for doing knn for a given k and specific test and train sets
+# returns a data.frame of predicted vs. real class
+totalKNN <- function(testset, trainset, K, mth = "euclidean") {
+  numtest <- nrow(testset)
+  numtrain <- nrow(trainset)
+  # response vectors
+  trainsetclass <- trainset[["gesture"]]
+  testsetclass <- testset[["gesture"]]
+  # combine the datasets
+  comb <- rbind(testset, trainset)
+  comb <- comb[!(names(comb) %in% "gesture")]
+  
+  # evaluate distance matrix ONCE, out of the loop, for time-efficiency
+  d <- as.matrix(dist(comb, method = mth))
+  
+  # iterate through the distance matrix
+  predvreal <- matrix(nrow = numtest, ncol = 2)
+  for(i in 1:numtest) {
+    neighborhood <- order(d[i,(numtest+1):(numtest+numtrain)])
+    neighbors <- neighborhood[1:K]
+    neighborgestures <- trainsetclass[neighbors]
+    # below is an implementation of the mode operation (majority rule)
+    neighbortable <- table(neighborgestures)
+    prediction <- names(neighbortable)[neighbortable == max(neighbortable)][[1]]
+    confusionrow <- c(prediction, testsetclass[i])
+    predvreal[i,] <- confusionrow
+  }
+  predvreal <- as.data.frame(predvreal)
+  names(predvreal) <- c("prediction", "real")
+  return(predvreal)
+}
+# function for doing knn with CV
+# returns a data.table of totalKNN outputs at each fold, rep, and the optimal k  
+# no need for stratified sampling since the data is evenly split between all 8 gestures
+totalKNN.CV <- function(trainset, reps, folds, k_levels = 1:10, method = "euclidean", strat = FALSE) {
+
+  indices <- generateCVRuns(trainset[["gesture"]], reps, folds, stratified = strat)
+  
+  finalresult <- data.table()
+  for(i in 1:reps) {
+    thisrepindices <- indices[[i]]
+    
+    for(j in 1:folds) {
+      print(paste("Now working on fold", j, "out of", folds, "of rep", i, "out of", reps, "."))
+      testindices <- thisrepindices[[j]]
+      
+      cvtrain <- trainset[-testindices,]
+      cvtest <- trainset[testindices,]
+
+      for(y in 1:length(k_levels)) { 
+        k <- k_levels[y]
+        k_result <- as.data.table(totalKNN(testset = cvtest, trainset = cvtrain, K = k, mth = method))
+        k_result <- copy(k_result)[, c("rep", "fold", "k") := list(i, j, k)]
+        finalresult <- rbind(finalresult, k_result, fill = TRUE)
+      }
+    }
+  }
+finresdetails <- copy(finalresult)[, list(accurate = .SD[prediction == real,.N], inaccurate = .SD[prediction != real,.N]), by = list(rep, fold, k)][, accuracy := accurate/(accurate + inaccurate), by = list(rep, fold, k)]
+bestks <- copy(finresdetails)[, .(accuracy = mean(accuracy)), by = list(k)][order(-accuracy)]
+bestk <- bestks[1, k]
+return(list(allptspred = finalresult, toplist = bestks, topk = bestk))
+}
+
+#### KNN ####
+tic("Euclidean KNN Training")
+trainresult_euc <- totalKNN.CV(trainset = train, reps = 1, folds = 10, k_levels = 1:5, method = "euclidean")
+toc()
+trainresult_euc$toplist
+trainresult_euc$topk
+
+tic("Manhattan KNN Training")
+trainresult_man <- totalKNN.CV(trainset = train, reps = 1, folds = 10, k_levels = 1:5, method = "manhattan")
+toc()
+trainresult_man$toplist
+trainresult_man$topk
+
+tic("Euclidean KNN Test")
+testresult_euc <- totalKNN(testset = test, trainset = train, K = trainresult_euc$topk, mth = "euclidean")
+c_euc <- confusionMatrix(testresult_euc$prediction, testresult_euc$real)
+toc()
+c_euc$table
+c_euc$overall
+
+tic("Manhattan KNN Test")
+testresult_man <- totalKNN(testset = test, trainset = train, K = trainresult_man$topk, mth = "manhattan")
+c_man <- confusionMatrix(testresult_man$prediction, testresult_man$real)
+toc()
+c_man$table
+c_man$overall
+
+#### Read ECG Data ####
+# read ECG data
+ECGtrain <- as.data.frame(fread("NN_Classification_ecgTRAIN"))
+ECGtrain[[1]] <- as.numeric(ECGtrain[[1]] > 0)
+ECGtest <- as.data.frame(fread("NN_Classification_ecgTEST"))
+ECGtest[[1]] <- as.numeric(ECGtest[[1]] > 0)
+
+#### Regression ####
+# Find optimal lambda values 
+flassoOpt <- function(trainset, nfold, modelname) {
+  # the first function calculates a lasso penalty, the second calculates the fusion penalty
+  opt1 <- optL1(response = trainset[, 1], penalized = trainset[, -1], fold = nfold, model = modelname, trace = FALSE)
+  opt1f <- optL1(response = trainset[, 1], penalized = trainset[, -1], fusedl = TRUE, fold = nfold, model = modelname, trace = FALSE)
+  # this is the fit with the fused lasso penalties
+  fit <- penalized(response = trainset[, 1], penalized = trainset[, -1], lambda1 = opt1$lambda, lambda2 = opt1f$lambda, fusedl = TRUE, model = modelname)
+  return(fit)
+}
+# Predict classes for some test data
+flassoPredict <- function(fit, test) {
+  pred <- as.numeric(predict(fit, test[, -1]) >= 0.5)
+  res <- as.data.frame(list(predicted = pred, real = test[[1]]))
+  return(res)
+}
+
+tic("Regression Training")
+fitopt <- flassoOpt(ECGtrain, 10, "logistic")
+toc()
+print("Lambda1 - LASSO")
+fitopt@lambda1
+print("Lambda2 - Fusion")
+fitopt@lambda2
+
+tic("Regression Test")
+ECGpred <- flassoPredict(fitopt, ECGtest)
+c_ECG <- confusionMatrix(as.factor(ECGpred$predicted), as.factor(ECGpred$real))
+toc()
+c_ECG$table
+c_ECG$overall
+fitopt@penalized
+
+ECGtraindiff <- as.data.frame(cbind(ECGtrain[[1]], t(apply(ECGtrain[, -1], 1, diff))))
+ECGtestdiff <- as.data.frame(cbind(ECGtest[[1]], t(apply(ECGtest[, -1], 1, diff))))
+
+tic("Regression Diff Training")
+fitoptdiff <- flassoOpt(ECGtraindiff, 10, "logistic")
+toc()
+print("Lambda1 - LASSO")
+fitoptdiff@lambda1
+print("Lambda2 - Fusion")
+fitoptdiff@lambda2
+
+tic("Regression Diff Test")
+ECGpreddiff <- flassoPredict(fitoptdiff, ECGtestdiff)
+c_ECGdiff <- confusionMatrix(as.factor(ECGpreddiff$predicted), as.factor(ECGpreddiff$real))
+toc()
+c_ECGdiff$table
+c_ECGdiff$overall
+fitoptdiff@penalized
+```
+
+
+
