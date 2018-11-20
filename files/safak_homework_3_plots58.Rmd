@@ -1,0 +1,112 @@
+---
+title: "Plotly Gestures 5-8, HW3"
+author: "Safak Kilic - IE582 - Fall 2018"
+
+---
+
+On this page are plots of motion gestures 5-8, made for my Homework 3 submission, which may have not rendered on the main page.
+
+```{r setup, echo= FALSE, include=FALSE}
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+require(data.table)
+require(TunePareto)
+require(plotly)
+require(caret)
+require(penalized)
+require(tictoc)
+require(htmltools)
+require(e1071)
+# read motion data 
+testX <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TEST/uWaveGestureLibrary_X_TEST")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+testY <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TEST/uWaveGestureLibrary_Y_TEST")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+testZ <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TEST/uWaveGestureLibrary_Z_TEST")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+trainX <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TRAIN/uWaveGestureLibrary_X_TRAIN")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+trainY <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TRAIN/uWaveGestureLibrary_Y_TRAIN")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+trainZ <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/UWave_TRAIN/uWaveGestureLibrary_Z_TRAIN")[, setnames(.SD, "V1", "gesture")][, instance := 1:nrow(.SD)])
+
+# read ECG data
+ECGtrain <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/NN_Classification_ecgTRAIN"))
+ECGtrain[[1]] <- as.numeric(ECGtrain[[1]] > 0)
+ECGtest <- as.data.frame(fread("~/Desktop/okul/Data Mining/data/NN_Classification_ecgTEST"))
+ECGtest[[1]] <- as.numeric(ECGtest[[1]] > 0)
+
+integrate <- function(tbl) {
+  tblint <- as.data.frame(t(apply(tbl[!(names(tbl) %in% c("gesture", "instance"))], 1, cumsum)))
+  tblint <- cbind(tblint, gesture = tbl[["gesture"]], instance = tbl[["instance"]])
+  return(as.data.frame(tblint))
+}
+plotfunc <- function(dataX, dataY, dataZ, row) {
+  dataX <- dataX[row,]
+  dataY <- dataY[row,]
+  dataZ <- dataZ[row,]
+  # maintain gesture information
+  gesture <- dataX[["gesture"]]
+  tdataX <- t(dataX[!(names(dataX) %in% c("gesture", "instance"))])
+  colnames(tdataX) <- "X"
+  tdataY <- t(dataY[!(names(dataY) %in% c("gesture", "instance"))])
+  colnames(tdataY) <- "Y"
+  tdataZ <- t(dataZ[!(names(dataZ) %in% c("gesture", "instance"))])
+  colnames(tdataZ) <- "Z"
+  times <- as.data.frame(1:nrow(tdataX))
+  colnames(times) <- "t"
+  toplot <- as.data.frame(cbind(tdataX, tdataY, tdataZ, times))
+  return(list(gest = gesture, plt = toplot))
+}
+instlist <- c(which(trainX[["gesture"]] == 1)[1], which(trainX[["gesture"]] == 2)[1], which(trainX[["gesture"]] == 3)[1], which(trainX[["gesture"]] == 4)[1],
+              which(trainX[["gesture"]] == 5)[1], which(trainX[["gesture"]] == 6)[1], which(trainX[["gesture"]] == 7)[1], which(trainX[["gesture"]] == 8)[1])
+
+inst <- instlist[5]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa5 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv5 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp5 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[6]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa6 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv6 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp6 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[7]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa7 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv7 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp7 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+
+inst <- instlist[8]
+pftraina <- plotfunc(trainX, trainY, trainZ, inst)
+pftrainv <- plotfunc(integrate(trainX), integrate(trainY), integrate(trainZ), inst)
+pftrainx <- plotfunc(integrate(integrate(trainX)), integrate(integrate(trainY)), integrate(integrate(trainZ)), inst)
+
+pa8 <- plot_ly(pftraina[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Acceleration Training, Gesture =", pftraina[["gest"]])) %>% add_markers()
+pv8 <- plot_ly(pftrainv[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Velocity Training, Gesture =", pftrainv[["gest"]])) %>% add_markers()
+pp8 <- plot_ly(pftrainx[["plt"]], x = ~X, y = ~Y, z = ~Z, marker = list(color = ~t, colorscale = "Viridis")) %>% layout(title = paste("Position Training, Gesture =", pftrainx[["gest"]])) %>% add_markers()
+```
+
+```{r plot, echo=FALSE}
+pa5
+pv5
+pp5
+
+pa6
+pv6
+pp6
+
+pa7
+pv7
+pp7
+
+pa8
+pv8
+pp8
+```
