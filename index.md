@@ -15,3 +15,7 @@
 ## Week 9 (November 19)
 
 [Here](/files/safak_homework_3.html) is my 3rd HW submission. Due to memory issues the 3-D plots may not have rendered correctly. [Click here](/files/safak_homework_3_plots14.html) to access the plots for gestures 1-4 and [here](/files/safak_homework_3_plots58.html) to access those for gestures 5-8.
+
+## Week 14 (December 28)
+
+[Here](/files/safak_homework_bonus.html) is my Bonus HW submission.
