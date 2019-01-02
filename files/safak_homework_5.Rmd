@@ -1,0 +1,152 @@
+---
+title: "Homework 5"
+author: "Safak Kilic - IE582 - Fall 2018"
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+require(data.table)
+require(cluster)
+require(glmnet)
+```  
+
+In this homework, we will use clustering methods to solve a multiple instance learning (MIL) problem. In such a problem, the predictions to be made relate to "bags" of instances, not instances themselves. Therefore a necessary step is collapsing data regarding instance-level data into aggregated bag-level data. The clustering methods will thus be used to transform raw data from each instance into average "distances" to cluster centroids within each bag.
+
+## Data Input and Normalization
+
+```{r input, echo= FALSE}
+# read data
+musk <- fread("~/Desktop/okul/Data Mining/data/Musk1.csv")
+
+```  
+After the data is read, it is stripped of identifying (class or bag) information and scaled. This set of identifying information ("names") and the scaled features will be provided to the "mil.analysis" function in the next section.
+
+```{r dists}
+# separate data into labels and feature info
+musknames <- musk[, c(1, 2)]
+setnames(musknames, c("bagclass", "bagid"))
+
+muskfeatures <- musk[, 3:ncol(musk)][, lapply(.SD, scale)]
+
+```  
+
+## Clustering & CV Function
+
+The following function called "mil.analysis" carries out clustering and 10-fold LASSO model cross-validation. It needs to be supplied with the number of clusters to split the data into, the type of clustering (PAM/Hieararchical), and the type of distance measure (Euclidean/Manhattan), in addition to the data outlined above.
+```{r function}
+mil.analysis <- function(clusts, clutype, disttype, names, features) {
+  
+  # depending on supplied distance type, find distance matrix
+  distmat <- dist(features, method = disttype)
+  
+  # depending on supplied clustering type, carry out clustering
+  if (clutype == "pam") {
+    clusters <- pam(distmat, clusts, diss = TRUE)$clustering  
+  }
+  else {
+    clusters <- cutree(hclust(distmat, method = "ward.D2"), k = clusts)
+  }
+  # bind cluster info to features
+  clustered <- cbind(features, clusters)     
+  # find cluster centroids
+  clustcentros <- copy(clustered)[, lapply(.SD, mean), by = clusters] 
+  # find distance of each instance from centroids
+  clustcentrodist <- as.matrix(dist(rbind(copy(clustcentros)[, clusters := NULL], copy(clustered)[, clusters := NULL]), method = disttype))
+  clustcentrodist <- as.data.table(clustcentrodist[(clusts+1):nrow(clustcentrodist), 1:clusts])
+  
+  # find mean to-centroid distances for each bag, merge with bag classes
+  bagdata <- unique(merge(names, cbind(bagid = names$bagid, clustcentrodist)[, lapply(.SD, mean), by = bagid], by = "bagid"))[, bagid := NULL]
+  
+  # 10-fold CV with lasso penalties
+  cvfit <- cv.glmnet(x = as.matrix(copy(bagdata)[, bagclass := NULL]), y = as.factor(bagdata$bagclass), nfolds = 10, type.measure = "auc", family = "binomial")
+  
+  # returns a line of data so a table can be constructed
+  return(data.table(clusts = clusts, clutype = clutype, disttype = disttype, cvminlambda = cvfit$lambda.min, cvminerror = min(cvfit$cvm)))
+}
+
+```  
+
+## Running the Algorithm & Results
+
+The function displayed above can be run iteratively for both types of clustering approach, both types of distance measures, and for number of clusters up to 20 in a for loop. The results of the run are detailed in the table below, in ascending level of 10-fold CV error. The error is calculated as the area under the ROC curve (AUC) of the CV predictions. 
+```{r run, echo=FALSE, warning=FALSE}
+# range of cluster numbers to examine
+nrange <- 2:20
+# create empty table and populate within for loop
+resultstable <- data.table()
+for (i in nrange) {
+  resultstable <- rbind(resultstable, mil.analysis(i, "pam", "euclidean", musknames, muskfeatures))
+  resultstable <- rbind(resultstable, mil.analysis(i, "hclus", "euclidean", musknames, muskfeatures))
+  resultstable <- rbind(resultstable, mil.analysis(i, "pam", "manhattan", musknames, muskfeatures))
+  resultstable <- rbind(resultstable, mil.analysis(i, "hclus", "manhattan", musknames, muskfeatures))
+}
+
+resultstable[order(resultstable$cvminerror)]
+```  
+
+It must be noted that when warnings are not suppressed, this R code will generate warnings stating that the errors reported are of type "deviance". That is, they do not come from the ROC curve but are the squared errors of the predictions. This is not by design, but is rather caused by the fact that the n-fold cross-validation function used in the "glmnet" package does not allow "folds" with less than 10 instances for the AUC error estimation. Since there are 92 species of molecules in the dataset, and this assignment specifies 10-fold cross validation, there is no way to actually get errors of the AUC type. However, using 9-fold CV or using some method to synthetically increase the number of instances to 100 would make the code work, at the cost of stretching the assignment constraints.
+
+## Appendix - Code
+```{r app, eval=FALSE}
+require(data.table)
+require(cluster)
+require(glmnet)
+
+setwd("~/Desktop/okul/Data Mining/data/")
+# read data
+musk <- fread("Musk1.csv")
+
+# separate data into labels and feature info
+musknames <- musk[, c(1, 2)]
+setnames(musknames, c("bagclass", "bagid"))
+
+muskfeatures <- musk[, 3:ncol(musk)][, lapply(.SD, scale)]
+
+# this function uses clustering methods to collapse multiple-instance data into bag-level data
+# and also runs a 10-fold CV lasso training on the dataset
+mil.analysis <- function(clusts, clutype, disttype, names, features) {
+  
+  # depending on supplied distance type, find distance matrix
+  distmat <- dist(features, method = disttype)
+  
+  # depending on supplied clustering type, carry out clustering
+  if (clutype == "pam") {
+    clusters <- pam(distmat, clusts, diss = TRUE)$clustering  
+  }
+  else {
+    clusters <- cutree(hclust(distmat, method = "ward.D2"), k = clusts)
+  }
+  # bind cluster info to features
+  clustered <- cbind(features, clusters)     
+  # find cluster centroids
+  clustcentros <- copy(clustered)[, lapply(.SD, mean), by = clusters] 
+  # find distance of each instance from centroids
+  clustcentrodist <- as.matrix(dist(rbind(copy(clustcentros)[, clusters := NULL], copy(clustered)[, clusters := NULL]), method = disttype))
+  clustcentrodist <- as.data.table(clustcentrodist[(clusts+1):nrow(clustcentrodist), 1:clusts])
+  
+  # find mean to-centroid distances for each bag, merge with bag classes
+  bagdata <- unique(merge(names, cbind(bagid = names$bagid, clustcentrodist)[, lapply(.SD, mean), by = bagid], by = "bagid"))[, bagid := NULL]
+  
+  # 10-fold CV with lasso penalties
+  cvfit <- cv.glmnet(x = as.matrix(copy(bagdata)[, bagclass := NULL]), y = as.factor(bagdata$bagclass), nfolds = 10, type.measure = "auc", family = "binomial")
+  
+  # returns a line of data so a table can be constructed
+  return(data.table(clusts = clusts, clutype = clutype, disttype = disttype, cvminlambda = cvfit$lambda.min, cvminerror = min(cvfit$cvm)))
+}
+
+# range of cluster numbers to examine
+nrange <- 2:20
+# create empty table and populate within for loop
+resultstable <- data.table()
+for (i in nrange) {
+  resultstable <- rbind(resultstable, mil.analysis(i, "pam", "euclidean", musknames, muskfeatures))
+  resultstable <- rbind(resultstable, mil.analysis(i, "hclus", "euclidean", musknames, muskfeatures))
+  resultstable <- rbind(resultstable, mil.analysis(i, "pam", "manhattan", musknames, muskfeatures))
+  resultstable <- rbind(resultstable, mil.analysis(i, "hclus", "manhattan", musknames, muskfeatures))
+}
+
+resultstable[order(resultstable$cvminerror)]
+
+```
+
