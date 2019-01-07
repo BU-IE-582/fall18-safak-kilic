@@ -23,3 +23,7 @@
 ## Week 15 (January 2)
 
 [Here](/files/safak_homework_5.html) is my 5th HW submission.
+
+## Week 16 (January 7)
+
+[Here](/files/Project.html) is my term project.

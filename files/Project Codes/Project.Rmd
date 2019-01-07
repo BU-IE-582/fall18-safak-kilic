@@ -1,0 +1,199 @@
+---
+title: "Project"
+author: "Group 3"
+date: "07/01/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+## Problem Description
+
+“The ball is round, the game lasts 90 minutes. Everything else is pure theory.” - Sepp Herberger
+
+Nowadays, with the growth of football as a game and an industry worldwide, the outcomes of football games are exciting targets to predict. Given the lucrative betting market formed around the outcomes of football games, the accurate, robust prediction of these outcomes has become a priority both for bettors attempting to make money, and for bookmakers attempting to stay ahead of their competition. However, these results do not always lend themselves to easy analysis, since there are many variables to a football game, not all of them predictive. One rather simplistic way of making a prediction is simply aggregating the odds put out by various bookmakers regarding a match. The problem with this approach is that such an approach, on average, can never beat the bookmakers’ odds. Therefore, whether one is a bettor or a bookmaker, whether one is using machine learning or simply trying to make a gut prediction, it becomes important to extract predictive features of a football game, which can include anything from the offensiveness of the home team to the weather on game day. 
+
+In essence, making a home-tie-away prediction regarding a football game can be thought of as a multiclass classification problem, with feature selection significantly involved. In this project, we have attempted to find highly predictive features (including both team-related features and odds) and use machine learning approaches on such features to predict the home-tie-away result of football games in the 2018-2019 English Premier League (EPL). To that end, the two datasets we used were public results of EPL match results from 2010 onwards and odds data aggregated from 27 bookmakers for the same matches. Since the data at the match level included only odds, the teams involved, and match scores, features were created by manipulating the past scores to create statistics regarding the teams involved in each match. 
+
+## Approach Summary
+
+To make the prediction the data first needs to be preprocessed. This will include attempting to fix inconsistencies and other errors in the data, or else removing entries with such errors. After preprocessing, odd data can be directly used as features for predicting match outcomes. To predict the effect of teams on match results, information about teams needs to be extracted from past score data. Many features such as win rates as home team, recent goals conceded as away team, and so forth are found by using past scores for each team. An R package generating Elo ratings for each team based on past wins and losses was also used to create Elo ratings as team features. After normalizing these features and applying PCA, various learning methods (notably support vector machines and logistic regression) will be applied to the data and error will be reported in Ranked Probability Score (RPS) form. 
+
+## Data Description
+
+The raw data has two parts: One part contains data regarding past match results (“Matches”) and the other contains data regarding odds from multiple bookmakers (“Odd Details”). The data goes back as far as August 2010. 
+
+“Matches” has very few relevant features, three of which being the names of home and away teams, along with the match score as character strings. Discrepancies among team names will need to be fixed, and the score will need to be expressed as numeric features. “Matches” additionally identifies each match by a unique match ID and assigns a POSIX formatted date and time to the matches. There are two additional features in “Matches” which are the league ID and type of sport, which identically identify all the data as coming from the corpus of soccer and the English Premier League.
+
+“Odd Details” also has the same match ID and date features as “Matches,” and these two features link instances in the two datasets to each other. “Odd Details” additionally contains features for bookmaker, bet type, “odd type” (i.e. which of the options within a certain bet type the odd refers to, like “over” for the bet type “over/under”), the handicap value (if applicable) and the odd value itself. Some interesting trends to be found in the “Odd Details” dataset are as follows:
+
++ **Distribution of odds over time:**
+There are many more odds from the most recent two years, 2018 and 2017, compared to all previous years. This means that the majority of the data used is fairly recent. This is good because one might expect recent statistics to be more predictive of a team’s performance, but also introduces complications where some teams have been competing at the Premier League level only sporadically. That is, teams that have fallen into the lower leagues at some point have spotty data about them, or the data might come from a date before the start of the training period.
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+load("~/Desktop/okul/Data Mining/proje/statistics.RData")
+
+years
+
+```
+
++ **Distribution of bet types:**
+As expected, while the data does include rather esoteric bet types such as “double chance” (”dc”), “both teams to score” (“bts”) and “draw no bet” (“ha”), most of the odds are for the more popular bet types of “home-tie-away” (“1x2”), “over/under” (“ou”) and “asian handicap” (“ah”). These three popular bet types seem to have a similarly good “coverage” of all the matches, but the varying handicap levels on the “ou” and “ah” bets mean that different matches will only have these kinds of odds depending on the handicap levels bookmakers will assign them. This makes these kinds of odds poorly suited for this study.
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+bettype
+
+```
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+oufigure
+
+```
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+ah_figure
+
+```
+
++ **Distribution of bookmakers:**
+In terms of overall number of odds assigned to matches, there seem to be around 20 bookmakers that are in rough parity with each other with the most total odds assigned. The remaining bookmakers do not have as many odds and will not likely be useful due to introducing missing data. When we look at the top 10 bookmakers in terms of total number of odds, we can see that there is a visible discrepancy between the most prolific bookmaker and the 10th-most prolific bookmaker of about 50,000 odds assigned to matches. Obviously this is problematic, however looking at the same top 10 bookmakers for only the “1x2” bet type reveals that these odds are quite uniformly complete across these bookmakers. It is likely these bookmakers which will be included in the construction of a features table.
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+bookmaker2
+
+```
+
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+bookmaker
+
+```
+
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+bookmaker_odd
+
+```
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+bookmaker_odd2
+
+```
+
+
+# Related Work
+
+With the perceived profitability of finding a “silver bullet” approach to predicting the outcomes of football games being so high, there has been quite a lot of research regarding the use of machine learning approaches to achieve this goal. Earlier such attempts at making such predictions, such as by Maher in 1982, [3] tended to emphasize using Poisson models to predicting team scores, which could then be compared to each other to make a decision for home-tie-away, taking into account the expected deviation of the scores. However, recent works such as that of Goddard (2005) [1] have taken the approach of this study, where features which depend upon the number of past goals are used to train a multiclass classification model, such as logistic regression. This model was thus found as an appropriate point to start this project. Ulmer and Fernandez, who carried out a similar study recently in 2014, found that Support Vector Machines (SVM) with a gaussian kernel offer good accuracy in predicting the “draw” case, which is ordinarily quite problematic. [4] Therefore, some SVM-based models were also included in this work. Lasek et al.’s 2013 work on the use of Elo ratings to rank teams was taken into account to add Elo ratings as features to the model. To that end, a function was defined to calculate these values keeping in mind the home field advantage teams may experience. In fact, Lasek et al.’s work specifically recommends using Elo ratings for their ability to include home field advantage. [2]
+
+# Approach
+
+To predict the match results as home, tie or away, a 4-step approach was proposed. For training data, the matches performed in the last 3 years (2016-2018) were chosen. 
+
+## Data Preprocessing
+
+* Errors with match data, such as inconsistently named teams (e.g. “stoke” vs. “stoke-city”) were corrected case-by-case.
+Postponed or cancelled matches, matches that do not have a score reported were removed (this excludes unplayed matches which can be the test instances, but not training instances).
+* The match scores encoded in a non-program-friendly manner were transformed into simple numeric features “Home_Score” and “Away_Score”
+* The match results (home, tie, away) were one-hot encoded so a binary classification model could be used to make a multiclass classification.
+* The odd data was pared down to include only odds that were less than a month old (with respect to the match they were on), to potentially increase their predictiveness.
+* Only “1x2” odds (odds placed on the outcome of the matches only) were kept, with three benefits: reducing missing values and the need for imputation since “1x2” odds are the most common and therefore complete type of odds, discluding severe outliers like those that exist in over/under data, and reducing the computational load of the problem significantly.
+* Among remaining, the bets from 8 bookmakers with most number of bets were kept in order to decrease the dimension of the data as well as computation time.
+
+## Feature Extraction
+
+* Each odd type from each bookmaker (e.g. Betfair Exchange’s home win odd) were checked to have a suitably low percentage of missing values in the training data (<1%) and zero missing values in the test data, unsuitable odd types were removed.
+* The odd data added as features included both the initial value of the odd and the final value of the odd, provided they fit the above non-missingness criteria.
+* Scores from match data were manipulated to come up with these features defining each team: win rates, draw rates, loss rates, average goals scored and conceded, current win streaks and longest win streaks within the training data.
+* These features were created for a given team being either the home team or the away team.
+Furthermore, the same features were recalculated for the last 3 games of each team, leading to as many “recent” features.
+* Where possible, “pair features” were calculated, such as the home win percentage given a specific pair of teams playing home and away. After a few runs, these were found to inject too many missing values into the data and removed from the workflow.
+* A function was implemented to use the win-loss-draw history of teams to generate Elo ratings for each team, dependent on the time frame of the training, this Elo rating became a feature for each team as well. This led to a total of 75 features.
+
+## PCA
+
+* The data were merged and normalized to the interval [0, 1].
+* PCA was performed on the data to find features with the greatest variance.
+* First 14 PCs were chosen for the analysis as they captured 93.5% of the variance.
+
+## Learning
+
+* Using various learning methods (polynomial and gaussian SVM and lasso logistic regression), parameter tuning was done using 10-fold cross validation over a training time period and a test time period chosen from among matches in the past.
+* Using the same learning methods, predictions were made using the tuned parameters found.
+* Errors were reported in RPS and used to track efficacy of learning methods.
+* If using a method which implicitly carries out feature selection, keep track of features used by algorithm.
+
+# Results & Discussion
+
+For the prediction of Premier League matches, three different models were trained using raw and normalized training set. For the sake of simplicity of this report, the predictions were acquired for all rounds, rather than round by round. To decide the predictive power of constructed models, RPS and accuracy measures were checked and tabulated as shown below in addition to tuned parameters for each model.
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+load("~/Desktop/okul/Data Mining/proje/final4.RData")
+
+RPS_table
+
+```
+
+The parameters for each model were tuned by finding the minimum mean RPS value. For polynomial SVM model, the tuning parameters (gamma, degree and cost) are the same for raw and normalized training sets.  The only tuned parameter for lasso logistic regression, minimum lambda, are 6x10^(-4) for normalized case and 7x10^(-3) for raw data set. The cost function for raw gaussian SVM is same as the polynomial SVM models, while the best gamma value for gaussian SVM with PCA is the same as that of polynomial SVMs. 
+
+The first thing that can be noticed is that the application of normalization and PCA, to subsequently use the first 14 principal components (93.5% of the variance in the data), greatly affects the RPS value. The RPS values are decreased nearly by 0.05 and 0.13 for gaussian SVM and lasso logistic regression, respectively. Although there is a trend of RPS depending on training data type, such a conclusion cannot be made for accuracies. While the total accuracy is increased for gaussian SVM using PCA, it is decreased for both polynomial SVM and lasso logistic regression. When the accuracies are individually analyzed, it can be seen that the home and away team wins are predicted more accurately than tie except gaussian SVM without PCA. It is important to mention that for this model, all matches were predicted to be home wins, which is unreasonable. Even though the RPS is lower than logistic regression without PCA, the least accurate model is gaussian SVM without PCA. Since RPS is an error quantification method which takes into account the sharpness of the split at decision boundaries, we propose that the aforementioned discrepancy between the trends in RPS and accuracy are caused due to learning algorithms using accuracy measures to train models rather than RPS measures. Therefore, a model that more often makes correct - but risky - predictions may sometimes be chosen by the learning algorithm over a model with more certainty when it is correct, but makes more errors overall.
+
+While logistic regression methods seem just a little better than others for tie predictions, gaussian SVM with PCA is superior to any other model with 98% accuracy for away wins. The nearest model is logistic regression without PCA with 71% accuracy closely followed by other except gaussian without PCA. For home win predictions, again gaussian SVM with PCA has the highest accuracy (81%). Of course this was an expected result, as the total accuracy of this model is at least 20% higher than other methods and RPS is at least 0.04 lower. By taking these results into consideration, the best model predicting the match outcomes were decided to be gaussian SVM with normalization and PCA.
+
+Seeing how much the model was improved by PCA, it is worthwhile to identify which features PCA identified as the source of greatest variance within the data.
+
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+plot(pca, cex.lab=1.5,main="PCA Components",cex.main=2)
+
+A
+
+```
+
+
+This graph reveals that about 55% of the variance within the data can be captured by two principal components, and while the “with-PCA” learning approaches used the first 14 principal components (approximately 93.5% of the variance within the data captured), we can look at these first two principal components to understand which features had the greatest effect on the model predictions. Below is the “loadings table,” which contains the coefficients of each feature in the first and second principal components.
+
+```{r,include=TRUE,eval=TRUE,echo=FALSE,fig.align = "center",fig.width=12,fig.height=6}
+
+newPC1
+
+newPC2
+
+```
+
+
+There are a few takeaways from this table. The first is that clearly, the first principal component “cares about” the performance of the home team, while the second does so for the away team. Another takeaway is that recent performance metrics and Elo rankings are slightly more predictive than overall performance metrics. In fact, this leads to the third takeaway that both of these principal components are composed of a large group of features in about equal weight, with almost all features receiving coefficients of magnitudes close to 0.2. Therefore, the most predictive feature is only slightly more predictive than the few features that follow it. Another takeaway of note is that odd data does not feature into these first principal components at all, reaffirming our choice in extracting data from goals to evaluate teams. 
+
+Other features that could have been included in this study were, most notably, odd data for other bet types (over/under and asian handicap) and pair data - data pertaining to specific team-team matchups. These were both disincluded later due to having too many missing values and requiring a massive imputation effort that might have introduced biases into the model. Odd data were specifically crippled by the varying handicap levels, whereas pairing data were impaired by the fact that teams tended to move up to and down from the Premier League, leading to many nonexistent pairs. Additionally, the inclusion of other bet types would have increased the number of features immensely, slowing the runtime of the algorithm. The final accuracy of the study was fortunately high enough to justify the disinclusion of such features.
+
+# Conclusions & Future Work
+
+Overall, the major finding of this work has been that a gaussian kernel SVM with PCA was a good learning model with a mean RPS value of ~0.16 and a correct-classification accuracy of ~80%, compared to a logistic regression model and SVM without PCA. The use of PCA to extract 14 synthetic features with the highest variance was definitely a major factor in selecting better features than the 75 features we started with. The two immediate challenges for this model approach are the classification of ties as such and the wrangling of missing data, especially since logistic regression and SVM algorithms cannot handle missing data. Therefore, while the model is accurate, it is not very robust and further work is needed. In addition, it must be kept in mind, however, that finding a highly accurate method like this for match result prediction is not sufficient to have a money-making betting strategy. One must also beat the accuracy of the bookmaker’s implied predictions, in addition to the bookmaker’s estimated error margin, both of which are implied by the odds. 
+
+Future work to expand upon the successes and shortcomings of this project would likely include, first and foremost, addressing the issue of missing values in the odd data. This is because odd data is the largest corpus of data we have access to that is not being fully exploited. A method of imputing odd values for arbitrary bet types over a changing time period is needed to somehow include odd data fully in a further study. Another step a future study could take could address the issue of difficulty predicting ties, by using the implied ordinal nature of the home-tie-away classification. That is, a game whose outcome is “home” is more similar to a “tie” than a game with an “away” result. This would require a regression approach rather than a classification approach. Finally, more informative data sets can be harvested, likely including halftime data, some kind of aggressiveness/defensiveness data regarding teams, and data regarding individual players, which may be easy to find but difficult to compile. However, using such an augmented data set may be a necessity for a much more accurate prediction.
+
+# Code
+
+The code for this project can be found at:
+https://github.com/BU-IE-582/fall18-elifesvap/tree/master/Project%20Codes
+
+# Works Cited
+
+1. Goddard, John. “Regression Models for Forecasting Goals and Match Results in Association Football.” International Journal of Forecasting, vol. 21, no. 2, 2005, pp. 331–340., doi:10.1016/j.ijforecast.2004.08.002.
+2. Lasek, Jan, et al. “The Predictive Power of Ranking Systems in Association Football.” International Journal of Applied Pattern Recognition, vol. 1, no. 1, 2013, p. 27., doi:10.1504/ijapr.2013.052339.
+3. Maher, M. J. “Modelling Association Football Scores.” Statistica Neerlandica, vol. 36, no. 3, 1982, pp. 109–118., doi:10.1111/j.1467-9574.1982.tb00782.x.
+4. Ulmer, Ben, and Matt Fernandez. “Predicting Soccer Match Results in the English Premier League.” Term Paper, Stanford University Faculty of Computer Science, 2014.
+
